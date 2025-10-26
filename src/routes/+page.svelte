@@ -1,20 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { HermesClient } from '@pythnetwork/hermes-client';
-
-	/**
-	 * BLOCKBERG TERMINAL with by Pyth Network
-	 *
-	 * Integrated Pyth Network Features (Official Hermes Client):
-	 * - @pythnetwork/hermes-client
-	 * - 5 crypto assets: SOL, BTC, ETH, AVAX, LINK
-	 * - Confidence intervals: Shows price uncertainty (±%)
-	 * - Spread calculation: Confidence as percentage of spot price
-	 */
+	import { magicBlockClient, PositionDirection } from '$lib/magicblock';
 
 	const hermesClient = new HermesClient('https://hermes.pyth.network', {});
 
-	// Pyth Network Feed IDs for major crypto assets
 	const PYTH_FEEDS = {
 		SOL: { id: '0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d', name: 'SOL/USD' },
 		BTC: { id: '0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43', name: 'BTC/USD' },
@@ -65,6 +55,11 @@
 		{ rank: 5, address: '0x6f2a9d...4c8b', pnl: -1450.75, trades: 15 },
 	];
 
+	let walletAddress = '';
+	let walletBalance = 0;
+	let magicBlockStatus = 'Initializing...';
+	let isOnChainMode = false;
+
 	function updateTime() {
 		currentTime = new Date().toLocaleTimeString();
 		const now = Date.now();
@@ -110,11 +105,9 @@
 			const startTime = Date.now();
 			console.log('[PYTH] Fetching latest prices using official Hermes client...');
 
-			// Get all feed IDs
 			const priceIds = Object.values(PYTH_FEEDS).map(f => f.id);
 			console.log('[PYTH] Requesting', priceIds.length, 'price feeds...');
 
-			// Use official Hermes client to get latest price updates
 			const priceUpdates = await hermesClient.getLatestPriceUpdates(priceIds);
 
 			console.log('[PYTH] Response received in', Date.now() - startTime, 'ms');
@@ -123,23 +116,19 @@
 				console.log('[PYTH] Parsing', priceUpdates.parsed.length, 'price feeds...');
 
 				for (const priceData of priceUpdates.parsed) {
-					// Find which symbol this feed ID belongs to
 					const symbol = Object.keys(PYTH_FEEDS).find(
 						key => PYTH_FEEDS[key as keyof typeof PYTH_FEEDS].id === '0x' + priceData.id
 					);
 
 					if (symbol) {
-						// Parse price data using Pyth's exponential format
 						const price = parseFloat(priceData.price.price) * Math.pow(10, priceData.price.expo);
 						const confidence = parseFloat(priceData.price.conf) * Math.pow(10, priceData.price.expo);
 						const emaPrice = parseFloat(priceData.ema_price.price) * Math.pow(10, priceData.ema_price.expo);
 						const publishTime = priceData.price.publish_time;
 
-						// Calculate price change from previous price
 						const prevPrice = previousPrices[symbol] || price;
 						const change = prevPrice !== 0 ? ((price - prevPrice) / prevPrice) * 100 : 0;
 
-						// Calculate spread (confidence interval as percentage of price)
 						const spread = price !== 0 ? (confidence / price) * 100 : 0;
 
 						prices[symbol] = {
@@ -158,16 +147,16 @@
 				}
 
 				prices = prices;
-				pythStatus = `✓ Updated ${Object.keys(prices).length} assets`;
+				pythStatus = `Updated ${Object.keys(prices).length} assets`;
 				pythLastUpdate = Date.now();
-				console.log('[PYTH] ✓ SUCCESS: Updated all prices via Hermes client');
+				console.log('[PYTH] SUCCESS: Updated all prices via Hermes client');
 			} else {
-				pythStatus = '⚠ No parsed data';
+				pythStatus = 'No parsed data';
 				console.warn('[PYTH] No parsed data in Hermes response');
 			}
 		} catch (error: any) {
-			pythStatus = `✗ Error: ${error.message}`;
-			console.error('[PYTH] ✗ ERROR: Failed to fetch prices:', error);
+			pythStatus = `Error: ${error.message}`;
+			console.error('[PYTH] ERROR: Failed to fetch prices:', error);
 		}
 	}
 
@@ -187,13 +176,38 @@
 		command = '';
 	}
 
-	function openPosition(direction: 'LONG' | 'SHORT') {
+	async function openPosition(direction: 'LONG' | 'SHORT') {
 		const currentPrice = prices[selectedTab].price;
 		const size = parseFloat(positionSize);
 
 		if (!size || size <= 0) {
 			alert('Invalid position size');
 			return;
+		}
+
+		if (isOnChainMode) {
+			try {
+				magicBlockStatus = 'Opening position on-chain...';
+				const tp = takeProfit ? parseFloat(takeProfit) : undefined;
+				const sl = stopLoss ? parseFloat(stopLoss) : undefined;
+
+				const txSig = await magicBlockClient.openPosition(
+					selectedTab,
+					direction === 'LONG' ? PositionDirection.Long : PositionDirection.Short,
+					currentPrice,
+					size,
+					tp,
+					sl
+				);
+
+				console.log('[TRADING] Position opened on-chain:', txSig);
+				magicBlockStatus = `Position opened: ${txSig.substring(0, 8)}...`;
+			} catch (error: any) {
+				console.error('[TRADING] Failed to open position:', error);
+				magicBlockStatus = `Error: ${error.message}`;
+				alert(`Failed to open position: ${error.message}`);
+				return;
+			}
 		}
 
 		const position = {
@@ -214,9 +228,21 @@
 		stopLoss = '';
 	}
 
-	function closePosition(id: number) {
+	async function closePosition(id: number) {
 		const position = activePositions.find(p => p.id === id);
 		if (!position) return;
+
+		if (isOnChainMode) {
+			try {
+				magicBlockStatus = 'Closing position on-chain...';
+				const txSig = await magicBlockClient.closePosition(id.toString());
+				console.log('[TRADING] Position closed on-chain:', txSig);
+				magicBlockStatus = `Position closed: ${txSig.substring(0, 8)}...`;
+			} catch (error: any) {
+				console.error('[TRADING] Failed to close position:', error);
+				magicBlockStatus = `Error: ${error.message}`;
+			}
+		}
 
 		const currentPrice = prices[position.symbol].price;
 		const pnl = position.direction === 'LONG'
@@ -269,8 +295,22 @@
 	}
 
 	onMount(async () => {
-		console.log('[APP] Initializing Blockberg Terminal with Pyth Network Hermes...');
+		console.log('[APP] Initializing Blockberg Terminal with Pyth Network + MagicBlock...');
 		console.log('[APP] Using official @pythnetwork/hermes-client package');
+
+		try {
+			magicBlockStatus = 'Initializing session wallet...';
+			const sessionWallet = await magicBlockClient.initializeSessionWallet();
+			walletAddress = sessionWallet.publicKey.toBase58();
+			walletBalance = await magicBlockClient.getBalance();
+			magicBlockStatus = `Wallet ready (${walletBalance.toFixed(4)} SOL)`;
+			console.log('[MAGICBLOCK] Session wallet initialized:', walletAddress);
+			console.log('[MAGICBLOCK] Balance:', walletBalance, 'SOL');
+			magicBlockClient.setAdminWallet('2ACsdGiDz4qhCNTkbkPcHNEk5DuG9cfyV4o1j9sidxhFKhyyXWg4GgHutwQrnXBovSRA9ixfVWwYWzNH8hHmbDy2');
+		} catch (error) {
+			console.error('[MAGICBLOCK] Failed to initialize:', error);
+			magicBlockStatus = 'Initialization failed';
+		}
 
 		fetchNews();
 		startPythPriceUpdates();
@@ -279,7 +319,7 @@
 		setInterval(fetchNews, 300000);
 		setInterval(updateTime, 1000);
 
-		console.log('[APP] Blockberg Terminal ready - Powered by Pyth Network Hermes');
+		console.log('[APP] Blockberg Terminal ready');
 
 		return () => {
 			if (pythUpdateInterval) {
@@ -305,6 +345,13 @@
 			<span class="status-value">{pythStatus}</span>
 			{#if pythLastUpdate > 0}
 				<span class="status-age">{Math.floor((Date.now() - pythLastUpdate) / 1000)}s ago</span>
+			{/if}
+		</div>
+		<div class="magicblock-status">
+			<span class="status-label">MAGICBLOCK:</span>
+			<span class="status-value">{magicBlockStatus}</span>
+			{#if walletAddress}
+				<span class="wallet-addr">{walletAddress.substring(0, 4)}...{walletAddress.substring(walletAddress.length - 4)}</span>
 			{/if}
 		</div>
 		<div class="competition-timer">
@@ -578,6 +625,23 @@
 	.status-age {
 		color: #999;
 		font-size: 9px;
+	}
+
+	.magicblock-status {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		color: #ff9500;
+		font-size: 11px;
+		padding: 4px 12px;
+		background: #000;
+		border: 1px solid #333;
+	}
+
+	.wallet-addr {
+		color: #00aaff;
+		font-size: 10px;
+		font-family: 'Courier New', monospace;
 	}
 
 	.competition-timer {

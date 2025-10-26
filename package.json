@@ -25,7 +25,10 @@
 		"@rollup/rollup-darwin-arm64": "^4.52.5"
 	},
 	"dependencies": {
+		"@coral-xyz/anchor": "^0.32.1",
+		"@magicblock-labs/bolt-sdk": "^0.2.4",
 		"@pythnetwork/hermes-client": "^2.0.0",
+		"@solana/web3.js": "^1.98.4",
 		"axios": "^1.12.2",
 		"lightweight-charts": "^5.0.9",
 		"ws": "^8.18.3"
