@@ -1,9 +1,52 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { HermesClient } from '@pythnetwork/hermes-client';
+
+	/**
+	 * BLOCKBERG TERMINAL - Powered by Pyth Network
+	 *
+	 * Integrated Pyth Network Features (Official Hermes Client):
+	 * - Real-time price feeds via @pythnetwork/hermes-client
+	 * - 5 crypto assets: SOL, BTC, ETH, AVAX, LINK
+	 * - Confidence intervals: Shows price uncertainty (±%)
+	 * - EMA prices: Exponential Moving Average prices for smoothed trends
+	 * - Data freshness: Real-time display of data age in seconds
+	 * - Spread calculation: Confidence as percentage of spot price
+	 *
+	 * Pyth Network provides high-frequency, real-time market data from
+	 * 120+ first-party publishers including exchanges and market makers.
+	 */
+
+	// Initialize Hermes client with public endpoint
+	const hermesClient = new HermesClient('https://hermes.pyth.network', {});
+
+	// Pyth Network Feed IDs for major crypto assets
+	const PYTH_FEEDS = {
+		SOL: { id: '0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d', name: 'SOL/USD' },
+		BTC: { id: '0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43', name: 'BTC/USD' },
+		ETH: { id: '0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace', name: 'ETH/USD' },
+		AVAX: { id: '0x93da3352f9f1d105fdfe4971cfa80e9dd777bfc5d0f683ebb6e1294b92137bb7', name: 'AVAX/USD' },
+		LINK: { id: '0x8ac0c70fff57e9aefdf5edf44b51d62c2d433653cbb2cf5cc06bb115af04d221', name: 'LINK/USD' },
+	};
+
+	type PriceData = {
+		price: number;
+		change: number;
+		confidence: number;
+		emaPrice: number;
+		publishTime: number;
+		spread: number;
+	};
 
 	let news: any[] = [];
-	let prices = { SOL: { price: 0, change: 0 }, BTC: { price: 0, change: 0 }, ETH: { price: 0, change: 0 } };
-	let ws: WebSocket | null = null;
+	let prices: Record<string, PriceData> = {
+		SOL: { price: 0, change: 0, confidence: 0, emaPrice: 0, publishTime: 0, spread: 0 },
+		BTC: { price: 0, change: 0, confidence: 0, emaPrice: 0, publishTime: 0, spread: 0 },
+		ETH: { price: 0, change: 0, confidence: 0, emaPrice: 0, publishTime: 0, spread: 0 },
+		AVAX: { price: 0, change: 0, confidence: 0, emaPrice: 0, publishTime: 0, spread: 0 },
+		LINK: { price: 0, change: 0, confidence: 0, emaPrice: 0, publishTime: 0, spread: 0 },
+	};
+	let previousPrices: Record<string, number> = {};
 	let command = '';
 	let selectedTab = 'SOL';
 	let positionSize = '100';
@@ -17,6 +60,9 @@
 	let competitionEndTime = new Date(Date.now() + 3600000);
 	let timeRemaining = '';
 	let newsLoading = true;
+	let pythUpdateInterval: any = null;
+	let pythStatus = 'Initializing...';
+	let pythLastUpdate = 0;
 	let leaderboardData = [
 		{ rank: 1, address: '0x7a2e9f...3f4b', pnl: 12450.00, trades: 47 },
 		{ rank: 2, address: '0x9b1c4a...8c2d', pnl: 8230.50, trades: 32 },
@@ -65,44 +111,76 @@
 		}
 	}
 
-	function connectPriceStream() {
-		console.log('[WEBSOCKET] Connecting to Binance real-time price streams...');
-		const streams = ['solusdt@ticker', 'btcusdt@ticker', 'ethusdt@ticker'];
+	async function fetchPythPrices() {
+		try {
+			const startTime = Date.now();
+			console.log('[PYTH] Fetching latest prices using official Hermes client...');
 
-		ws = new WebSocket(`wss://stream.binance.com:9443/stream?streams=${streams.join('/')}`);
+			// Get all feed IDs
+			const priceIds = Object.values(PYTH_FEEDS).map(f => f.id);
+			console.log('[PYTH] Requesting', priceIds.length, 'price feeds...');
 
-		ws.onopen = () => {
-			console.log('[WEBSOCKET] SUCCESS: Connected to Binance price feeds');
-		};
+			// Use official Hermes client to get latest price updates
+			const priceUpdates = await hermesClient.getLatestPriceUpdates(priceIds);
 
-		ws.onerror = (error) => {
-			console.error('[WEBSOCKET] ERROR: Connection failed', error);
-		};
+			console.log('[PYTH] Response received in', Date.now() - startTime, 'ms');
 
-		ws.onclose = () => {
-			console.log('[WEBSOCKET] Connection closed');
-		};
+			if (priceUpdates?.parsed) {
+				console.log('[PYTH] Parsing', priceUpdates.parsed.length, 'price feeds...');
 
-		ws.onmessage = (event) => {
-			const message = JSON.parse(event.data);
-			const data = message.data;
+				for (const priceData of priceUpdates.parsed) {
+					// Find which symbol this feed ID belongs to
+					const symbol = Object.keys(PYTH_FEEDS).find(
+						key => PYTH_FEEDS[key as keyof typeof PYTH_FEEDS].id === '0x' + priceData.id
+					);
 
-			if (data && data.e === '24hrTicker') {
-				const change = parseFloat(data.P);
-				const price = parseFloat(data.c);
+					if (symbol) {
+						// Parse price data using Pyth's exponential format
+						const price = parseFloat(priceData.price.price) * Math.pow(10, priceData.price.expo);
+						const confidence = parseFloat(priceData.price.conf) * Math.pow(10, priceData.price.expo);
+						const emaPrice = parseFloat(priceData.ema_price.price) * Math.pow(10, priceData.ema_price.expo);
+						const publishTime = priceData.price.publish_time;
 
-				if (data.s === 'SOLUSDT') {
-					prices.SOL = { price, change };
+						// Calculate price change from previous price
+						const prevPrice = previousPrices[symbol] || price;
+						const change = prevPrice !== 0 ? ((price - prevPrice) / prevPrice) * 100 : 0;
+
+						// Calculate spread (confidence interval as percentage of price)
+						const spread = price !== 0 ? (confidence / price) * 100 : 0;
+
+						prices[symbol] = {
+							price,
+							change,
+							confidence,
+							emaPrice,
+							publishTime,
+							spread
+						};
+
+						previousPrices[symbol] = price;
+
+						console.log(`[PYTH] ${symbol}: $${price.toFixed(2)} (±$${confidence.toFixed(4)})`);
+					}
 				}
-				if (data.s === 'BTCUSDT') {
-					prices.BTC = { price, change };
-				}
-				if (data.s === 'ETHUSDT') {
-					prices.ETH = { price, change };
-				}
+
 				prices = prices;
+				pythStatus = `✓ Updated ${Object.keys(prices).length} assets`;
+				pythLastUpdate = Date.now();
+				console.log('[PYTH] ✓ SUCCESS: Updated all prices via Hermes client');
+			} else {
+				pythStatus = '⚠ No parsed data';
+				console.warn('[PYTH] No parsed data in Hermes response');
 			}
-		};
+		} catch (error: any) {
+			pythStatus = `✗ Error: ${error.message}`;
+			console.error('[PYTH] ✗ ERROR: Failed to fetch prices:', error);
+		}
+	}
+
+	function startPythPriceUpdates() {
+		console.log('[PYTH] Starting real-time price updates (2-second interval)...');
+		fetchPythPrices(); // Initial fetch
+		pythUpdateInterval = setInterval(fetchPythPrices, 2000); // Update every 2 seconds
 	}
 
 	function executeCommand() {
@@ -110,6 +188,8 @@
 		if (cmd.includes('SOL')) selectedTab = 'SOL';
 		else if (cmd.includes('BTC')) selectedTab = 'BTC';
 		else if (cmd.includes('ETH')) selectedTab = 'ETH';
+		else if (cmd.includes('AVAX')) selectedTab = 'AVAX';
+		else if (cmd.includes('LINK')) selectedTab = 'LINK';
 		command = '';
 	}
 
@@ -195,19 +275,22 @@
 	}
 
 	onMount(async () => {
-		console.log('[APP] Initializing Blockberg Terminal...');
+		console.log('[APP] Initializing Blockberg Terminal with Pyth Network Hermes...');
+		console.log('[APP] Using official @pythnetwork/hermes-client package');
 
 		fetchNews();
-		connectPriceStream();
+		startPythPriceUpdates();
 		updateTime();
 
 		setInterval(fetchNews, 300000);
 		setInterval(updateTime, 1000);
 
-		console.log('[APP] Blockberg Terminal ready');
+		console.log('[APP] Blockberg Terminal ready - Powered by Pyth Network Hermes');
 
 		return () => {
-			ws?.close();
+			if (pythUpdateInterval) {
+				clearInterval(pythUpdateInterval);
+			}
 		};
 	});
 </script>
@@ -223,6 +306,13 @@
 			class="command-input"
 		/>
 		<button class="go-button" on:click={executeCommand}>GO</button>
+		<div class="pyth-status">
+			<span class="status-label">PYTH:</span>
+			<span class="status-value">{pythStatus}</span>
+			{#if pythLastUpdate > 0}
+				<span class="status-age">{Math.floor((Date.now() - pythLastUpdate) / 1000)}s ago</span>
+			{/if}
+		</div>
 		<div class="competition-timer">
 			<span class="timer-label">ROUND ENDS:</span>
 			<span class="timer-value">{timeRemaining}</span>
@@ -236,18 +326,35 @@
 			<span class={prices.SOL.change >= 0 ? 'change-up' : 'change-down'}>
 				{prices.SOL.change >= 0 ? '▲' : '▼'} {Math.abs(prices.SOL.change).toFixed(2)}%
 			</span>
+			<span class="confidence" title="Confidence Interval">±{prices.SOL.confidence.toFixed(4)}</span>
 		</div>
 		<div class="ticker-item">
 			BTC/USD <span class="price">{prices.BTC.price.toFixed(2)}</span>
 			<span class={prices.BTC.change >= 0 ? 'change-up' : 'change-down'}>
 				{prices.BTC.change >= 0 ? '▲' : '▼'} {Math.abs(prices.BTC.change).toFixed(2)}%
 			</span>
+			<span class="confidence" title="Confidence Interval">±{prices.BTC.confidence.toFixed(2)}</span>
 		</div>
 		<div class="ticker-item">
 			ETH/USD <span class="price">{prices.ETH.price.toFixed(2)}</span>
 			<span class={prices.ETH.change >= 0 ? 'change-up' : 'change-down'}>
 				{prices.ETH.change >= 0 ? '▲' : '▼'} {Math.abs(prices.ETH.change).toFixed(2)}%
 			</span>
+			<span class="confidence" title="Confidence Interval">±{prices.ETH.confidence.toFixed(3)}</span>
+		</div>
+		<div class="ticker-item">
+			AVAX/USD <span class="price">{prices.AVAX.price.toFixed(2)}</span>
+			<span class={prices.AVAX.change >= 0 ? 'change-up' : 'change-down'}>
+				{prices.AVAX.change >= 0 ? '▲' : '▼'} {Math.abs(prices.AVAX.change).toFixed(2)}%
+			</span>
+			<span class="confidence" title="Confidence Interval">±{prices.AVAX.confidence.toFixed(4)}</span>
+		</div>
+		<div class="ticker-item">
+			LINK/USD <span class="price">{prices.LINK.price.toFixed(3)}</span>
+			<span class={prices.LINK.change >= 0 ? 'change-up' : 'change-down'}>
+				{prices.LINK.change >= 0 ? '▲' : '▼'} {Math.abs(prices.LINK.change).toFixed(2)}%
+			</span>
+			<span class="confidence" title="Confidence Interval">±{prices.LINK.confidence.toFixed(5)}</span>
 		</div>
 	</div>
 
@@ -255,6 +362,8 @@
 		<button class="tab" class:active={selectedTab === 'SOL'} on:click={() => selectedTab = 'SOL'}>SOL EQUITY</button>
 		<button class="tab" class:active={selectedTab === 'BTC'} on:click={() => selectedTab = 'BTC'}>BTC EQUITY</button>
 		<button class="tab" class:active={selectedTab === 'ETH'} on:click={() => selectedTab = 'ETH'}>ETH EQUITY</button>
+		<button class="tab" class:active={selectedTab === 'AVAX'} on:click={() => selectedTab = 'AVAX'}>AVAX EQUITY</button>
+		<button class="tab" class:active={selectedTab === 'LINK'} on:click={() => selectedTab = 'LINK'}>LINK EQUITY</button>
 		<button class="tab">NEWS</button>
 		<button class="tab">LEADERBOARD</button>
 	</div>
@@ -284,19 +393,25 @@
 
 		<div class="panel chart-panel">
 			<div class="panel-header">
-				{selectedTab}/USDT PRICE CHART
+				{selectedTab}/USD PRICE CHART • PYTH NETWORK
 				<span class="chart-stats">
-					LAST: <span class="price">${prices[selectedTab].price.toFixed(2)}</span>
+					SPOT: <span class="price">${prices[selectedTab].price.toFixed(2)}</span>
 					<span class={prices[selectedTab].change >= 0 ? 'change-up' : 'change-down'}>
 						{prices[selectedTab].change >= 0 ? '▲' : '▼'} {Math.abs(prices[selectedTab].change).toFixed(2)}%
 					</span>
+					| EMA: <span class="ema-price">${prices[selectedTab].emaPrice.toFixed(2)}</span>
+					| CONF: <span class="confidence-stat">±{prices[selectedTab].spread.toFixed(3)}%</span>
+					{#if prices[selectedTab].publishTime > 0}
+						| FRESH: <span class="freshness" title="Data Age">{Math.floor((Date.now() / 1000 - prices[selectedTab].publishTime))}s</span>
+					{/if}
 				</span>
 			</div>
 			<div class="chart-container">
 				<iframe
-					src="https://s.tradingview.com/widgetembed/?frameElementId=tradingview_chart&symbol=BINANCE:{selectedTab}USDT&interval=15&hidesidetoolbar=1&hidetoptoolbar=0&symboledit=0&saveimage=0&toolbarbg=0a0a0a&studies=[]&theme=dark&style=1&timezone=Etc/UTC&withdateranges=1&studies_overrides={{}}&overrides={{'mainSeriesProperties.candleStyle.upColor':'00ff00','mainSeriesProperties.candleStyle.downColor':'ff0000','mainSeriesProperties.candleStyle.borderUpColor':'00ff00','mainSeriesProperties.candleStyle.borderDownColor':'ff0000','mainSeriesProperties.candleStyle.wickUpColor':'00ff00','mainSeriesProperties.candleStyle.wickDownColor':'ff0000','paneProperties.background':'0a0a0a','paneProperties.vertGridProperties.color':'1a1a1a','paneProperties.horzGridProperties.color':'1a1a1a','scalesProperties.textColor':'ff9500'}}&enabled_features=[]&disabled_features=[]&locale=en&utm_source=localhost&utm_medium=widget&utm_campaign=chart&utm_term=BINANCE:{selectedTab}USDT"
+					src="https://www.tradingview.com/widgetembed/?symbol=BINANCE:{selectedTab}USDT&interval=15&theme=dark&style=1&locale=en&allow_symbol_change=0"
 					style="width: 100%; height: 100%; border: none;"
 					title="{selectedTab} Chart"
+					allow="fullscreen"
 				></iframe>
 			</div>
 
@@ -444,6 +559,33 @@
 		background: #00ff00;
 	}
 
+	.pyth-status {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		color: #ff9500;
+		font-size: 11px;
+		padding: 4px 12px;
+		background: #000;
+		border: 1px solid #333;
+	}
+
+	.status-label {
+		color: #666;
+		font-size: 10px;
+		letter-spacing: 0.5px;
+	}
+
+	.status-value {
+		color: #00ff00;
+		font-weight: bold;
+	}
+
+	.status-age {
+		color: #999;
+		font-size: 9px;
+	}
+
 	.competition-timer {
 		display: flex;
 		align-items: center;
@@ -503,6 +645,27 @@
 	.change-down {
 		color: #ff0000;
 		font-size: 12px;
+	}
+
+	.confidence {
+		color: #666;
+		font-size: 10px;
+		font-style: italic;
+	}
+
+	.ema-price {
+		color: #00ccff;
+		font-weight: normal;
+	}
+
+	.confidence-stat {
+		color: #ffaa00;
+		font-size: 11px;
+	}
+
+	.freshness {
+		color: #00ff00;
+		font-size: 11px;
 	}
 
 	.tabs {

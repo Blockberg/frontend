@@ -25,6 +25,7 @@
 		"@rollup/rollup-darwin-arm64": "^4.52.5"
 	},
 	"dependencies": {
+		"@pythnetwork/hermes-client": "^2.0.0",
 		"axios": "^1.12.2",
 		"lightweight-charts": "^5.0.9",
 		"ws": "^8.18.3"
