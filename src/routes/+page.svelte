@@ -3,21 +3,15 @@
 	import { HermesClient } from '@pythnetwork/hermes-client';
 
 	/**
-	 * BLOCKBERG TERMINAL - Powered by Pyth Network
+	 * BLOCKBERG TERMINAL with by Pyth Network
 	 *
 	 * Integrated Pyth Network Features (Official Hermes Client):
-	 * - Real-time price feeds via @pythnetwork/hermes-client
+	 * - @pythnetwork/hermes-client
 	 * - 5 crypto assets: SOL, BTC, ETH, AVAX, LINK
 	 * - Confidence intervals: Shows price uncertainty (±%)
-	 * - EMA prices: Exponential Moving Average prices for smoothed trends
-	 * - Data freshness: Real-time display of data age in seconds
 	 * - Spread calculation: Confidence as percentage of spot price
-	 *
-	 * Pyth Network provides high-frequency, real-time market data from
-	 * 120+ first-party publishers including exchanges and market makers.
 	 */
 
-	// Initialize Hermes client with public endpoint
 	const hermesClient = new HermesClient('https://hermes.pyth.network', {});
 
 	// Pyth Network Feed IDs for major crypto assets
