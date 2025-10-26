@@ -30,8 +30,8 @@ export enum PositionDirection {
 	Short = 'SHORT',
 }
 
-export const WORLD_ID = new BN(1);
-export const WORLD_INSTANCE_ID = new PublicKey('11111111111111111111111111111111');
+export const WORLD_ID = new BN(2408);
+export const WORLD_INSTANCE_ID = new PublicKey('56tAKaoQfFLx1yujKUo2tYwNaC1DvgmQpxKfVkCDCmzn');
 
 export class MagicBlockClient {
 	connection: Connection;
