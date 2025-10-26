@@ -58,7 +58,7 @@
 	let walletAddress = '';
 	let walletBalance = 0;
 	let magicBlockStatus = 'Initializing...';
-	let isOnChainMode = false;
+	let isOnChainMode = true;
 
 	function updateTime() {
 		currentTime = new Date().toLocaleTimeString();
@@ -204,8 +204,7 @@
 				magicBlockStatus = `Position opened: ${txSig.substring(0, 8)}...`;
 			} catch (error: any) {
 				console.error('[TRADING] Failed to open position:', error);
-				magicBlockStatus = `Error: ${error.message}`;
-				alert(`Failed to open position: ${error.message}`);
+				magicBlockStatus = `Error - check console`;
 				return;
 			}
 		}
@@ -271,6 +270,31 @@
 		activePositions = activePositions.filter(p => p.id !== id);
 	}
 
+	async function requestAirdrop() {
+		try {
+			magicBlockStatus = 'Requesting airdrop...';
+			const signature = await magicBlockClient.requestAirdrop(1);
+			magicBlockStatus = `Airdrop sent: ${signature.substring(0, 8)}...`;
+			console.log('[AIRDROP] Sent:', signature);
+
+			// Poll balance every 2 seconds to update UI
+			const pollInterval = setInterval(async () => {
+				const newBalance = await magicBlockClient.getBalance();
+				if (newBalance > walletBalance) {
+					walletBalance = newBalance;
+					magicBlockStatus = `Wallet funded (${walletBalance.toFixed(4)} SOL)`;
+					clearInterval(pollInterval);
+				}
+			}, 2000);
+
+			// Stop polling after 60 seconds
+			setTimeout(() => clearInterval(pollInterval), 60000);
+		} catch (error: any) {
+			console.error('[AIRDROP] Failed:', error);
+			magicBlockStatus = `Airdrop failed - check console`;
+		}
+	}
+
 	$: {
 		activePositions = activePositions.map(position => {
 			const currentPrice = prices[position.symbol].price;
@@ -331,7 +355,11 @@
 
 <div class="bloomberg">
 	<div class="command-bar">
-		<div class="logo">BLOCKBERG</div>
+		<a href="/" class="logo">BLOCKBERG</a>
+		<div class="nav-links">
+			<a href="/" class="nav-link active">TERMINAL</a>
+			<a href="/competition" class="nav-link">COMPETITION</a>
+		</div>
 		<input
 			type="text"
 			bind:value={command}
@@ -352,6 +380,10 @@
 			<span class="status-value">{magicBlockStatus}</span>
 			{#if walletAddress}
 				<span class="wallet-addr">{walletAddress.substring(0, 4)}...{walletAddress.substring(walletAddress.length - 4)}</span>
+				<span class="wallet-balance">{walletBalance.toFixed(4)} SOL</span>
+				{#if walletBalance < 0.1}
+					<button class="airdrop-btn" on:click={requestAirdrop}>AIRDROP</button>
+				{/if}
 			{/if}
 		</div>
 		<div class="competition-timer">
@@ -434,18 +466,30 @@
 
 		<div class="panel chart-panel">
 			<div class="panel-header">
-				{selectedTab}/USD PRICE CHART • PYTH NETWORK
-				<span class="chart-stats">
-					SPOT: <span class="price">${prices[selectedTab].price.toFixed(2)}</span>
-					<span class={prices[selectedTab].change >= 0 ? 'change-up' : 'change-down'}>
-						{prices[selectedTab].change >= 0 ? '▲' : '▼'} {Math.abs(prices[selectedTab].change).toFixed(2)}%
-					</span>
-					| EMA: <span class="ema-price">${prices[selectedTab].emaPrice.toFixed(2)}</span>
-					| CONF: <span class="confidence-stat">±{prices[selectedTab].spread.toFixed(3)}%</span>
+				<span class="chart-title">{selectedTab}/USD PRICE CHART • PYTH NETWORK</span>
+				<div class="chart-stats">
+					<div class="stat-box">
+						<span class="stat-label">SPOT</span>
+						<span class="stat-value price-value">${prices[selectedTab].price.toFixed(2)}</span>
+						<span class={prices[selectedTab].change >= 0 ? 'change-up' : 'change-down'}>
+							{prices[selectedTab].change >= 0 ? '▲' : '▼'} {Math.abs(prices[selectedTab].change).toFixed(2)}%
+						</span>
+					</div>
+					<div class="stat-box">
+						<span class="stat-label">EMA</span>
+						<span class="stat-value ema-value">${prices[selectedTab].emaPrice.toFixed(2)}</span>
+					</div>
+					<div class="stat-box">
+						<span class="stat-label">CONFIDENCE</span>
+						<span class="stat-value conf-value">±{prices[selectedTab].spread.toFixed(3)}%</span>
+					</div>
 					{#if prices[selectedTab].publishTime > 0}
-						| FRESH: <span class="freshness" title="Data Age">{Math.floor((Date.now() / 1000 - prices[selectedTab].publishTime))}s</span>
+						<div class="stat-box">
+							<span class="stat-label">FRESH</span>
+							<span class="stat-value fresh-value">{Math.floor((Date.now() / 1000 - prices[selectedTab].publishTime))}s</span>
+						</div>
 					{/if}
-				</span>
+				</div>
 			</div>
 			<div class="chart-container">
 				<iframe
@@ -456,27 +500,27 @@
 				></iframe>
 			</div>
 
-			<div class="trading-panel">
-				<div class="trading-controls">
-					<div class="input-group">
-						<label>SIZE (USD)</label>
+			<div class="trading-panel-below">
+				<div class="trading-controls-overlay">
+					<div class="input-group-overlay">
+						<label>SIZE</label>
 						<input type="number" bind:value={positionSize} placeholder="100" />
 					</div>
-					<div class="input-group">
-						<label>TAKE PROFIT</label>
-						<input type="number" bind:value={takeProfit} placeholder="Optional" />
+					<div class="input-group-overlay">
+						<label>TP</label>
+						<input type="number" bind:value={takeProfit} placeholder="0" />
 					</div>
-					<div class="input-group">
-						<label>STOP LOSS</label>
-						<input type="number" bind:value={stopLoss} placeholder="Optional" />
+					<div class="input-group-overlay">
+						<label>SL</label>
+						<input type="number" bind:value={stopLoss} placeholder="0" />
 					</div>
 				</div>
-				<div class="trading-buttons">
-					<button class="buy-button" on:click={() => openPosition('LONG')}>
-						BUY / LONG
+				<div class="trading-buttons-overlay">
+					<button class="buy-button-overlay" on:click={() => openPosition('LONG')}>
+						LONG
 					</button>
-					<button class="sell-button" on:click={() => openPosition('SHORT')}>
-						SELL / SHORT
+					<button class="sell-button-overlay" on:click={() => openPosition('SHORT')}>
+						SHORT
 					</button>
 				</div>
 			</div>
@@ -569,6 +613,31 @@
 		font-weight: bold;
 		color: #ff9500;
 		letter-spacing: 2px;
+		text-decoration: none;
+	}
+
+	.nav-links {
+		display: flex;
+		gap: 15px;
+	}
+
+	.nav-link {
+		color: #666;
+		text-decoration: none;
+		font-size: 13px;
+		padding: 4px 10px;
+		border: 1px solid transparent;
+		transition: all 0.2s;
+	}
+
+	.nav-link:hover {
+		color: #fff;
+		border-color: #333;
+	}
+
+	.nav-link.active {
+		color: #ff9500;
+		border-color: #ff9500;
 	}
 
 	.command-input {
@@ -642,6 +711,32 @@
 		color: #00aaff;
 		font-size: 10px;
 		font-family: 'Courier New', monospace;
+	}
+
+	.wallet-balance {
+		color: #00ff00;
+		font-weight: bold;
+		margin-left: 8px;
+		font-size: 10px;
+	}
+
+	.airdrop-btn {
+		background: #ff9500;
+		color: #000;
+		border: none;
+		padding: 4px 12px;
+		font-size: 10px;
+		font-weight: bold;
+		cursor: pointer;
+		margin-left: 8px;
+		font-family: 'Courier New', monospace;
+		letter-spacing: 1px;
+		transition: all 0.2s ease;
+	}
+
+	.airdrop-btn:hover {
+		background: #ffb733;
+		transform: scale(1.05);
 	}
 
 	.competition-timer {
@@ -836,99 +931,148 @@
 	}
 
 	.chart-container {
-		flex: 1;
 		background: #0a0a0a;
-		position: relative;
-		min-height: 400px;
+		height: 500px;
 		width: 100%;
 	}
 
-	.chart-stats {
-		margin-left: auto;
-		display: flex;
-		gap: 15px;
-		align-items: center;
-		font-size: 11px;
-	}
-
-	.trading-panel {
-		background: #0a0a0a;
+	.trading-panel-below {
+		background: #000;
 		padding: 12px;
 		border-top: 1px solid #333;
+		display: flex;
+		align-items: center;
+		gap: 15px;
 	}
 
-	.trading-controls {
-		display: grid;
-		grid-template-columns: repeat(3, 1fr);
+	.trading-controls-overlay {
+		display: flex;
 		gap: 10px;
-		margin-bottom: 12px;
+		align-items: flex-end;
 	}
 
-	.input-group {
+	.input-group-overlay {
 		display: flex;
 		flex-direction: column;
-		gap: 5px;
+		gap: 4px;
 	}
 
-	.input-group label {
+	.input-group-overlay label {
 		color: #ff9500;
 		font-size: 10px;
 		font-weight: bold;
-		letter-spacing: 0.5px;
+		letter-spacing: 1px;
 	}
 
-	.input-group input {
+	.input-group-overlay input {
 		background: #000;
 		border: 1px solid #333;
 		color: #fff;
 		padding: 6px 8px;
 		font-family: 'Courier New', monospace;
 		font-size: 12px;
+		width: 70px;
+		outline: none;
 	}
 
-	.input-group input:focus {
-		outline: none;
+	.input-group-overlay input:focus {
 		border-color: #ff9500;
 	}
 
-	.trading-buttons {
-		display: grid;
-		grid-template-columns: 1fr 1fr;
+	.trading-buttons-overlay {
+		display: flex;
 		gap: 10px;
+		margin-left: auto;
 	}
 
-	.buy-button,
-	.sell-button {
-		padding: 10px;
+	.buy-button-overlay,
+	.sell-button-overlay {
+		padding: 8px 24px;
 		font-family: 'Courier New', monospace;
-		font-size: 13px;
+		font-size: 12px;
 		font-weight: bold;
-		border: none;
+		border: 2px solid;
 		cursor: pointer;
-		letter-spacing: 1px;
-		transition: all 0.15s ease;
+		transition: all 0.2s ease;
+		letter-spacing: 2px;
 	}
 
-	.buy-button {
-		background: #00cc00;
+	.buy-button-overlay {
+		background: #002200;
+		color: #00ff00;
+		border-color: #00ff00;
+	}
+
+	.buy-button-overlay:hover {
+		background: #00ff00;
 		color: #000;
 	}
 
-	.buy-button:hover {
-		background: #00ff00;
-		transform: translateY(-1px);
-		box-shadow: 0 2px 8px rgba(0, 255, 0, 0.3);
+	.sell-button-overlay {
+		background: #220000;
+		color: #ff0000;
+		border-color: #ff0000;
 	}
 
-	.sell-button {
-		background: #cc0000;
+	.sell-button-overlay:hover {
+		background: #ff0000;
+		color: #000;
+	}
+
+	.chart-title {
+		color: #ff9500;
+		font-size: 11px;
+		font-weight: bold;
+		letter-spacing: 1px;
+	}
+
+	.chart-stats {
+		margin-left: auto;
+		display: flex;
+		gap: 12px;
+		align-items: center;
+	}
+
+	.stat-box {
+		display: flex;
+		align-items: baseline;
+		gap: 4px;
+		background: #0a0a0a;
+		padding: 2px 6px;
+		border: 1px solid #333;
+		font-size: 9px;
+	}
+
+	.stat-label {
+		color: #666;
+		font-size: 8px;
+		font-weight: bold;
+		letter-spacing: 0.5px;
+	}
+
+	.stat-value {
+		font-size: 9px;
+		font-weight: bold;
+		font-family: 'Courier New', monospace;
+		display: flex;
+		align-items: center;
+		gap: 3px;
+	}
+
+	.price-value {
 		color: #fff;
 	}
 
-	.sell-button:hover {
-		background: #ff0000;
-		transform: translateY(-1px);
-		box-shadow: 0 2px 8px rgba(255, 0, 0, 0.3);
+	.ema-value {
+		color: #fff;
+	}
+
+	.conf-value {
+		color: #ffaa00;
+	}
+
+	.fresh-value {
+		color: #00ff00;
 	}
 
 	.positions-panel {

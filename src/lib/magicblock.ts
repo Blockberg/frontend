@@ -1,20 +1,20 @@
 import { Connection, PublicKey, Keypair, LAMPORTS_PER_SOL, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
-import { FindComponentPda, FindEntityPda, ApplySystem, SerializeArgs, BN } from '@magicblock-labs/bolt-sdk';
+import { FindComponentPda, FindEntityPda, ApplySystem, SerializeArgs, BN, anchor } from '@magicblock-labs/bolt-sdk';
 
 export const MAGICBLOCK_RPC = 'https://rpc.magicblock.app/devnet/';
 
 export const COMPONENT_IDS = {
-	TRADING_ACCOUNT: new PublicKey('3UhnNbUpRi1QM6szPYJce4tBNLCbjxMESJJ8touBd55h'),
-	COMPETITION: new PublicKey('zQKpawEnbpdRj7MPzPuBKjJdgmSCC2A1aNi3NbGv4PN'),
-	POSITION: new PublicKey('8NHfJVx1ZD8tnb23v4xvTsUdhMxhHbjYpPz4ZDstobYP'),
-	LEADERBOARD: new PublicKey('5ohgmFUcN41uoZuP1QnFP9ErjDDCXA1FaxpFZAzfwU6q'),
+	TRADING_ACCOUNT: new PublicKey('3PDo9AKeLhU6hcUC7gft3PKQuotH4624mcevqdSiyTPS'),
+	COMPETITION: new PublicKey('FPKpeKHnfYuYo8JDiDW7mNzZB8qgf1mLYwpQAcbGyVhJ'),
+	POSITION: new PublicKey('9ACLRxNoDHXpHugLUmDtBGTQ6Q5vwnD4wUVSaWaNaVbv'),
+	LEADERBOARD: new PublicKey('BCrmcoi7dEgg7UY3SpZfM4dihAWaYuNk3wprXsy1Xp5X'),
 };
 
 export const SYSTEM_IDS = {
-	JOIN_COMPETITION: new PublicKey('FFRL7nSQxFYMEcUxb912WsvbMSDMPNefdgCe4aZYNxWk'),
-	OPEN_POSITION: new PublicKey('B1LMnYAtxvQLFG56YS9vscBFLid7KHp1nWTPYtFKFLPh'),
-	CLOSE_POSITION: new PublicKey('49kLMtwwnm5wdCKvtToUYgoxxo9PXjheS1rwcoSYkQfG'),
-	SETTLE_COMPETITION: new PublicKey('C1FTdtq531t4MViYtgo7LAft3GRkJimYAhVWFU4BE46i'),
+	JOIN_COMPETITION: new PublicKey('5aJzg88rRLAFGN1imRwK84WMD4JyZBvz7n47nSQz9oGm'),
+	OPEN_POSITION: new PublicKey('GdWvbNgbNxWHbSDTBweSi9zPgtRhggGxaJsCxL5vwDp9'),
+	CLOSE_POSITION: new PublicKey('CXnKyp5DGMWRHsj9JsbECqBbDP1GeUF3c8AYSPZMmNb2'),
+	SETTLE_COMPETITION: new PublicKey('32S5nHLK93PNVJQZgd4PQY4v9tkiLU2j9bEbHhJN4CuL'),
 };
 
 export const TRADING_PAIRS = {
@@ -30,8 +30,8 @@ export enum PositionDirection {
 	Short = 'SHORT',
 }
 
-export const WORLD_ID = new BN(2408);
-export const WORLD_INSTANCE_ID = new PublicKey('56tAKaoQfFLx1yujKUo2tYwNaC1DvgmQpxKfVkCDCmzn');
+export const WORLD_ID = new BN(2409);
+export const WORLD_INSTANCE_ID = new PublicKey('CVndFdiiuFhkcLEQy71JomGwgZT8Lqeq9oFuU14E9Ngk');
 
 export class MagicBlockClient {
 	connection: Connection;
@@ -54,6 +54,7 @@ export class MagicBlockClient {
 				this.sessionWallet = Keypair.fromSecretKey(secretKey);
 				console.log('[MAGICBLOCK] Loaded session wallet:', this.sessionWallet.publicKey.toBase58());
 				await this.initializeEntity();
+				this.setupProvider();
 				return this.sessionWallet;
 			} catch (e) {
 				console.log('[MAGICBLOCK] Failed to load stored wallet, creating new one');
@@ -68,6 +69,7 @@ export class MagicBlockClient {
 		console.log('[MAGICBLOCK] Created new session wallet:', this.sessionWallet.publicKey.toBase58());
 
 		await this.initializeEntity();
+		this.setupProvider();
 		return this.sessionWallet;
 	}
 
@@ -81,10 +83,7 @@ export class MagicBlockClient {
 			});
 			console.log('[MAGICBLOCK] Entity PDA:', this.entityPda.toBase58());
 
-			this.competitionEntity = FindEntityPda({
-				worldId: WORLD_ID,
-				entityId: new BN(0),
-			});
+			this.competitionEntity = new PublicKey('5ebXENtrEamPapRhzMGjvrcavWwrEwWiY4Yftjx3wUsk');
 			console.log('[MAGICBLOCK] Competition entity:', this.competitionEntity.toBase58());
 		} catch (e) {
 			console.error('[MAGICBLOCK] Failed to initialize entity:', e);
@@ -101,6 +100,36 @@ export class MagicBlockClient {
 		} catch (e) {
 			console.error('[MAGICBLOCK] Failed to set admin wallet:', e);
 		}
+	}
+
+	getProvider(): anchor.AnchorProvider {
+		if (!this.sessionWallet) {
+			throw new Error('Session wallet not initialized');
+		}
+
+		const wallet = {
+			publicKey: this.sessionWallet.publicKey,
+			signTransaction: async (tx: Transaction) => {
+				tx.partialSign(this.sessionWallet!);
+				return tx;
+			},
+			signAllTransactions: async (txs: Transaction[]) => {
+				return txs.map((tx) => {
+					tx.partialSign(this.sessionWallet!);
+					return tx;
+				});
+			},
+		};
+
+		return new anchor.AnchorProvider(this.connection, wallet as any, {
+			commitment: 'confirmed',
+		});
+	}
+
+	setupProvider(): void {
+		const provider = this.getProvider();
+		anchor.setProvider(provider);
+		console.log('[MAGICBLOCK] Global provider set for Bolt SDK');
 	}
 
 	async getTradingAccountPDA(owner: PublicKey): Promise<[PublicKey, number]> {
@@ -171,14 +200,16 @@ export class MagicBlockClient {
 				entity: positionEntityPda,
 			});
 
-			const args = {
-				pair_index: pairIndex,
-				direction: direction === PositionDirection.Long ? { Long: {} } : { Short: {} },
-				current_price: new BN(priceScaled),
-				size: new BN(sizeScaled),
-				take_profit: takeProfitScaled ? new BN(takeProfitScaled) : null,
-				stop_loss: stopLossScaled ? new BN(stopLossScaled) : null,
-			};
+			const argsData = {
+			pair_index: pairIndex,
+			direction: direction === PositionDirection.Long ? 0 : 1,
+			current_price: priceScaled,
+			size: sizeScaled,
+			take_profit: takeProfitScaled || 0,
+			stop_loss: stopLossScaled || 0,
+		};
+
+		const args = SerializeArgs(argsData);
 
 			const { transaction } = await ApplySystem({
 				authority: this.sessionWallet.publicKey,
@@ -285,8 +316,23 @@ export class MagicBlockClient {
 			this.sessionWallet.publicKey,
 			amount * LAMPORTS_PER_SOL
 		);
-		await this.connection.confirmTransaction(signature);
-		console.log('[MAGICBLOCK] Airdrop confirmed:', signature);
+
+		// Don't wait for confirmation, just return signature
+		// Confirmation can take a long time on devnet
+		console.log('[MAGICBLOCK] Airdrop requested:', signature);
+
+		// Poll for balance update in background
+		setTimeout(async () => {
+			for (let i = 0; i < 10; i++) {
+				await new Promise(resolve => setTimeout(resolve, 3000)); // Wait 3 seconds
+				const balance = await this.connection.getBalance(this.sessionWallet!.publicKey);
+				if (balance > 0) {
+					console.log('[MAGICBLOCK] Airdrop confirmed! Balance:', balance / LAMPORTS_PER_SOL);
+					break;
+				}
+			}
+		}, 0);
+
 		return signature;
 	}
 
@@ -297,6 +343,129 @@ export class MagicBlockClient {
 
 		const balance = await this.connection.getBalance(this.sessionWallet.publicKey);
 		return balance / LAMPORTS_PER_SOL;
+	}
+
+	async mintTrophyNFT(
+		rank: number,
+		winnerAddress: PublicKey,
+		competitionId: string,
+		finalPnl: number,
+		totalTrades: number
+	): Promise<string> {
+		if (!this.wallet) {
+			throw new Error('Admin wallet not initialized');
+		}
+
+		console.log('[MAGICBLOCK] Minting trophy NFT for rank', rank);
+
+		const mintKeypair = Keypair.generate();
+
+		const [metadataPDA] = PublicKey.findProgramAddressSync(
+			[
+				Buffer.from('metadata'),
+				new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s').toBuffer(),
+				mintKeypair.publicKey.toBuffer(),
+			],
+			new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s')
+		);
+
+		const SETTLE_COMPETITION_PROGRAM_ID = SYSTEM_IDS.SETTLE_COMPETITION;
+
+		const associatedTokenAddress = await this.getAssociatedTokenAddress(
+			mintKeypair.publicKey,
+			winnerAddress
+		);
+
+		try {
+			const instruction = await this.createMintTrophyInstruction(
+				this.wallet.publicKey,
+				winnerAddress,
+				mintKeypair.publicKey,
+				associatedTokenAddress,
+				metadataPDA,
+				rank,
+				competitionId,
+				finalPnl,
+				totalTrades
+			);
+
+			const transaction = new Transaction().add(instruction);
+			transaction.recentBlockhash = (await this.connection.getLatestBlockhash()).blockhash;
+			transaction.feePayer = this.wallet.publicKey;
+
+			transaction.sign(this.wallet, mintKeypair);
+
+			const signature = await sendAndConfirmTransaction(
+				this.connection,
+				transaction,
+				[this.wallet, mintKeypair],
+				{ commitment: 'confirmed' }
+			);
+
+			console.log('[MAGICBLOCK] Trophy NFT minted:', signature);
+			console.log('[MAGICBLOCK] Mint address:', mintKeypair.publicKey.toBase58());
+			return signature;
+		} catch (error) {
+			console.error('[MAGICBLOCK] Failed to mint trophy NFT:', error);
+			throw error;
+		}
+	}
+
+	async getAssociatedTokenAddress(mint: PublicKey, owner: PublicKey): Promise<PublicKey> {
+		const [address] = PublicKey.findProgramAddressSync(
+			[owner.toBuffer(), new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA').toBuffer(), mint.toBuffer()],
+			new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL')
+		);
+		return address;
+	}
+
+	async createMintTrophyInstruction(
+		authority: PublicKey,
+		winner: PublicKey,
+		mint: PublicKey,
+		tokenAccount: PublicKey,
+		metadata: PublicKey,
+		rank: number,
+		competitionId: string,
+		finalPnl: number,
+		totalTrades: number
+	): Promise<any> {
+		const args = {
+			rank,
+			competitionId,
+			finalPnl: Math.floor(finalPnl * 1e8),
+			totalTrades,
+		};
+
+		const accounts = {
+			authority,
+			winner,
+			mint,
+			tokenAccount,
+			metadata,
+			tokenProgram: new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'),
+			associatedTokenProgram: new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL'),
+			systemProgram: new PublicKey('11111111111111111111111111111111'),
+			rent: new PublicKey('SysvarRent111111111111111111111111111111111'),
+			tokenMetadataProgram: new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s'),
+		};
+
+		return {
+			keys: [
+				{ pubkey: accounts.authority, isSigner: true, isWritable: true },
+				{ pubkey: accounts.winner, isSigner: false, isWritable: true },
+				{ pubkey: accounts.mint, isSigner: true, isWritable: true },
+				{ pubkey: accounts.tokenAccount, isSigner: false, isWritable: true },
+				{ pubkey: accounts.metadata, isSigner: false, isWritable: true },
+				{ pubkey: accounts.tokenProgram, isSigner: false, isWritable: false },
+				{ pubkey: accounts.associatedTokenProgram, isSigner: false, isWritable: false },
+				{ pubkey: accounts.systemProgram, isSigner: false, isWritable: false },
+				{ pubkey: accounts.rent, isSigner: false, isWritable: false },
+				{ pubkey: accounts.tokenMetadataProgram, isSigner: false, isWritable: false },
+			],
+			programId: SYSTEM_IDS.SETTLE_COMPETITION,
+			data: Buffer.from(JSON.stringify(args)),
+		};
 	}
 }
 
