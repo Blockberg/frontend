@@ -1,7 +1,11 @@
-import { Connection, PublicKey, Keypair, LAMPORTS_PER_SOL, Transaction, sendAndConfirmTransaction } from '@solana/web3.js';
+import { Connection, PublicKey, Keypair, LAMPORTS_PER_SOL, Transaction, sendAndConfirmTransaction, TransactionInstruction, SystemProgram } from '@solana/web3.js';
 import { FindComponentPda, FindEntityPda, ApplySystem, SerializeArgs, BN, anchor } from '@magicblock-labs/bolt-sdk';
+import type { Adapter, SignerWalletAdapter } from '@solana/wallet-adapter-base';
 
 export const MAGICBLOCK_RPC = 'https://rpc.magicblock.app/devnet/';
+
+// Paper Trading Program ID from the contract
+export const PAPER_TRADING_PROGRAM_ID = new PublicKey('2zaegVL5odaCikNPEzCnaicgvu1n9ueHZoQrvEPWX161');
 
 export const COMPONENT_IDS = {
 	TRADING_ACCOUNT: new PublicKey('3PDo9AKeLhU6hcUC7gft3PKQuotH4624mcevqdSiyTPS'),
@@ -13,7 +17,7 @@ export const COMPONENT_IDS = {
 export const SYSTEM_IDS = {
 	JOIN_COMPETITION: new PublicKey('5aJzg88rRLAFGN1imRwK84WMD4JyZBvz7n47nSQz9oGm'),
 	OPEN_POSITION: new PublicKey('GdWvbNgbNxWHbSDTBweSi9zPgtRhggGxaJsCxL5vwDp9'),
-	CLOSE_POSITION: new PublicKey('CXnKyp5DGMWRHsj9JsbECqBbDP1GeUF3c8AYSPZMmNb2'),
+	CLOSE_POSITION: new PublicKey('CXnKyp5DGMWRHsj9JsbECqBbDP1GeUF3c8AYSPZMmNd2'),
 	SETTLE_COMPETITION: new PublicKey('32S5nHLK93PNVJQZgd4PQY4v9tkiLU2j9bEbHhJN4CuL'),
 };
 
@@ -37,11 +41,202 @@ export class MagicBlockClient {
 	connection: Connection;
 	wallet: Keypair | null = null;
 	sessionWallet: Keypair | null = null;
+	connectedWallet: Adapter | null = null;
 	entityPda: PublicKey | null = null;
 	competitionEntity: PublicKey | null = null;
 
 	constructor() {
 		this.connection = new Connection(MAGICBLOCK_RPC, 'confirmed');
+	}
+
+	// Set connected wallet adapter
+	setConnectedWallet(wallet: Adapter | null) {
+		this.connectedWallet = wallet;
+		console.log('[MAGICBLOCK] Connected wallet set:', wallet?.name || 'None');
+	}
+
+	// Get current wallet (prioritize connected wallet over session wallet)
+	getCurrentWallet(): { publicKey: PublicKey; signTransaction?: (tx: Transaction) => Promise<Transaction>; signAllTransactions?: (txs: Transaction[]) => Promise<Transaction[]> } | null {
+		if (this.connectedWallet?.connected && this.connectedWallet.publicKey) {
+			const signerWallet = this.connectedWallet as SignerWalletAdapter;
+			return {
+				publicKey: this.connectedWallet.publicKey,
+				signTransaction: signerWallet.signTransaction?.bind(signerWallet),
+				signAllTransactions: signerWallet.signAllTransactions?.bind(signerWallet)
+			};
+		}
+		
+		if (this.sessionWallet) {
+			return {
+				publicKey: this.sessionWallet.publicKey,
+				signTransaction: async (tx: Transaction) => {
+					tx.partialSign(this.sessionWallet!);
+					return tx;
+				},
+				signAllTransactions: async (txs: Transaction[]) => {
+					return txs.map((tx) => {
+						tx.partialSign(this.sessionWallet!);
+						return tx;
+					});
+				}
+			};
+		}
+
+		return null;
+	}
+
+	// Check if we have a connected wallet
+	isWalletConnected(): boolean {
+		return !!(this.connectedWallet?.connected || this.sessionWallet);
+	}
+
+	// Get user account PDA for a specific pair
+	getUserAccountPDA(userPubkey: PublicKey, pairIndex: number): [PublicKey, number] {
+		return PublicKey.findProgramAddressSync(
+			[
+				Buffer.from('user'),
+				userPubkey.toBuffer(),
+				Buffer.from([pairIndex])
+			],
+			PAPER_TRADING_PROGRAM_ID
+		);
+	}
+
+	// Get config PDA
+	getConfigPDA(): [PublicKey, number] {
+		return PublicKey.findProgramAddressSync(
+			[Buffer.from('config')],
+			PAPER_TRADING_PROGRAM_ID
+		);
+	}
+
+	// Check if user has initialized their trading account for a specific pair
+	async checkAccountInitialized(userPubkey: PublicKey, pairIndex: number): Promise<boolean> {
+		try {
+			const [userAccountPDA] = this.getUserAccountPDA(userPubkey, pairIndex);
+			const accountInfo = await this.connection.getAccountInfo(userAccountPDA);
+			return accountInfo !== null;
+		} catch (error) {
+			console.error('[MAGICBLOCK] Failed to check account initialization:', error);
+			return false;
+		}
+	}
+
+	// Initialize trading account for a user - MagicBlock ephemeral rollup approach
+	async initializeAccount(pairIndex: number, entryFee: number = 0.1, initialTokenIn: number = 10000): Promise<string> {
+		const currentWallet = this.getCurrentWallet();
+		if (!currentWallet) {
+			throw new Error('Wallet not connected');
+		}
+
+		try {
+			console.log('[MAGICBLOCK] Initializing trading account for pair', pairIndex);
+
+			// Create connection to main Solana (not ephemeral)
+			const mainConnection = new Connection('https://api.devnet.solana.com', 'confirmed');
+			
+			const [userAccountPDA] = this.getUserAccountPDA(currentWallet.publicKey, pairIndex);
+			const [configPDA] = this.getConfigPDA();
+			
+			// Check if account already exists
+			const existingAccount = await mainConnection.getAccountInfo(userAccountPDA);
+			if (existingAccount) {
+				console.log('[MAGICBLOCK] Account already initialized for pair', pairIndex);
+				return 'account_already_exists';
+			}
+			
+			// Get treasury from config on main chain
+			const configAccountInfo = await mainConnection.getAccountInfo(configPDA);
+			if (!configAccountInfo) {
+				throw new Error('Config account not found on main chain');
+			}
+			const treasuryPubkey = new PublicKey(configAccountInfo.data.subarray(40, 72));
+
+			const entryFeeScaled = Math.floor(entryFee * LAMPORTS_PER_SOL);
+			const initialTokenInScaled = Math.floor(initialTokenIn * 1e6);
+
+			// Setup for potential Anchor usage (keeping for future use)
+
+			// Calculate the correct Anchor discriminator
+			const methodName = "global:initialize_account";
+			const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(methodName));
+			const discriminator = new Uint8Array(hash).slice(0, 8);
+			
+			console.log('[MAGICBLOCK] Calculated discriminator:', Array.from(discriminator));
+			
+			// Create instruction data buffer
+			const instructionData = Buffer.alloc(25);
+			Buffer.from(discriminator).copy(instructionData, 0);
+			instructionData.writeUInt8(pairIndex, 8);
+			instructionData.writeBigUInt64LE(BigInt(entryFeeScaled), 9);
+			instructionData.writeBigUInt64LE(BigInt(initialTokenInScaled), 17);
+
+			const instruction = new TransactionInstruction({
+				keys: [
+					{ pubkey: userAccountPDA, isSigner: false, isWritable: true },
+					{ pubkey: configPDA, isSigner: false, isWritable: false },
+					{ pubkey: currentWallet.publicKey, isSigner: true, isWritable: true },
+					{ pubkey: treasuryPubkey, isSigner: false, isWritable: true },
+					{ pubkey: SystemProgram.programId, isSigner: false, isWritable: false }
+				],
+				programId: PAPER_TRADING_PROGRAM_ID,
+				data: instructionData
+			});
+
+			const transaction = new Transaction().add(instruction);
+			
+			// Get fresh blockhash to avoid duplicate transaction issues
+			const latestBlockhash = await mainConnection.getLatestBlockhash('finalized');
+			transaction.recentBlockhash = latestBlockhash.blockhash;
+			transaction.feePayer = currentWallet.publicKey;
+
+			console.log('[MAGICBLOCK] Transaction details:', {
+				userAccount: userAccountPDA.toBase58(),
+				treasury: treasuryPubkey.toBase58(),
+				pairIndex,
+				entryFee: entryFeeScaled,
+				blockhash: latestBlockhash.blockhash
+			});
+
+			// Sign and send transaction on main chain
+			let signature: string;
+			if (currentWallet.signTransaction) {
+				const signedTx = await currentWallet.signTransaction(transaction);
+				signature = await mainConnection.sendRawTransaction(signedTx.serialize(), {
+					skipPreflight: false,
+					preflightCommitment: 'finalized'
+				});
+			} else {
+				throw new Error('Wallet does not support transaction signing');
+			}
+
+			console.log('[MAGICBLOCK] Account initialized on main chain:', signature);
+			
+			// Wait for confirmation
+			await mainConnection.confirmTransaction(signature, 'confirmed');
+			
+			return signature;
+		} catch (error) {
+			console.error('[MAGICBLOCK] Failed to initialize account:', error);
+			throw error;
+		}
+	}
+
+	// Get account status for all pairs
+	async getAccountStatus(): Promise<{ [pairIndex: number]: boolean }> {
+		const currentWallet = this.getCurrentWallet();
+		if (!currentWallet) {
+			return {};
+		}
+
+		const status: { [pairIndex: number]: boolean } = {};
+		
+		// Check initialization status for all trading pairs
+		for (const [, pairIndex] of Object.entries(TRADING_PAIRS)) {
+			status[pairIndex] = await this.checkAccountInitialized(currentWallet.publicKey, pairIndex);
+		}
+
+		return status;
 	}
 
 	async initializeSessionWallet(): Promise<Keypair> {
@@ -103,22 +298,19 @@ export class MagicBlockClient {
 	}
 
 	getProvider(): anchor.AnchorProvider {
-		if (!this.sessionWallet) {
-			throw new Error('Session wallet not initialized');
+		const currentWallet = this.getCurrentWallet();
+		if (!currentWallet) {
+			throw new Error('No wallet available');
 		}
 
 		const wallet = {
-			publicKey: this.sessionWallet.publicKey,
-			signTransaction: async (tx: Transaction) => {
-				tx.partialSign(this.sessionWallet!);
-				return tx;
-			},
-			signAllTransactions: async (txs: Transaction[]) => {
-				return txs.map((tx) => {
-					tx.partialSign(this.sessionWallet!);
-					return tx;
-				});
-			},
+			publicKey: currentWallet.publicKey,
+			signTransaction: currentWallet.signTransaction || (async (tx: Transaction) => {
+				throw new Error('Wallet does not support transaction signing');
+			}),
+			signAllTransactions: currentWallet.signAllTransactions || (async (txs: Transaction[]) => {
+				throw new Error('Wallet does not support multiple transaction signing');
+			}),
 		};
 
 		return new anchor.AnchorProvider(this.connection, wallet as any, {
@@ -157,8 +349,9 @@ export class MagicBlockClient {
 		takeProfit?: number,
 		stopLoss?: number
 	): Promise<string> {
-		if (!this.sessionWallet || !this.entityPda || !this.competitionEntity) {
-			throw new Error('Session wallet or entity not initialized');
+		const currentWallet = this.getCurrentWallet();
+		if (!currentWallet || !this.entityPda || !this.competitionEntity) {
+			throw new Error('Wallet not connected or entity not initialized');
 		}
 
 		console.log('[MAGICBLOCK] Opening position:', {
@@ -212,7 +405,7 @@ export class MagicBlockClient {
 		const args = SerializeArgs(argsData);
 
 			const { transaction } = await ApplySystem({
-				authority: this.sessionWallet.publicKey,
+				authority: currentWallet.publicKey,
 				systemId: SYSTEM_IDS.OPEN_POSITION,
 				entities: [
 					{
@@ -232,12 +425,22 @@ export class MagicBlockClient {
 				args: args,
 			});
 
-			const signature = await sendAndConfirmTransaction(
-				this.connection,
-				transaction,
-				[this.sessionWallet],
-				{ commitment: 'confirmed' }
-			);
+			// Sign and send transaction
+			let signature: string;
+			if (currentWallet.signTransaction) {
+				const signedTx = await currentWallet.signTransaction(transaction);
+				signature = await this.connection.sendRawTransaction(signedTx.serialize());
+			} else if (this.sessionWallet) {
+				// Fallback to session wallet signing
+				signature = await sendAndConfirmTransaction(
+					this.connection,
+					transaction,
+					[this.sessionWallet],
+					{ commitment: 'confirmed' }
+				);
+			} else {
+				throw new Error('No signing method available');
+			}
 
 			console.log('[MAGICBLOCK] Position opened:', signature);
 			return signature;
@@ -248,8 +451,9 @@ export class MagicBlockClient {
 	}
 
 	async closePosition(positionId: string): Promise<string> {
-		if (!this.sessionWallet || !this.entityPda || !this.competitionEntity) {
-			throw new Error('Session wallet or entity not initialized');
+		const currentWallet = this.getCurrentWallet();
+		if (!currentWallet || !this.entityPda || !this.competitionEntity) {
+			throw new Error('Wallet not connected or entity not initialized');
 		}
 
 		console.log('[MAGICBLOCK] Closing position:', positionId);
@@ -258,7 +462,7 @@ export class MagicBlockClient {
 			const positionEntityPda = new PublicKey(positionId);
 
 			const { transaction } = await ApplySystem({
-				authority: this.sessionWallet.publicKey,
+				authority: currentWallet.publicKey,
 				systemId: SYSTEM_IDS.CLOSE_POSITION,
 				entities: [
 					{
@@ -277,12 +481,22 @@ export class MagicBlockClient {
 				world: WORLD_INSTANCE_ID,
 			});
 
-			const signature = await sendAndConfirmTransaction(
-				this.connection,
-				transaction,
-				[this.sessionWallet],
-				{ commitment: 'confirmed' }
-			);
+			// Sign and send transaction
+			let signature: string;
+			if (currentWallet.signTransaction) {
+				const signedTx = await currentWallet.signTransaction(transaction);
+				signature = await this.connection.sendRawTransaction(signedTx.serialize());
+			} else if (this.sessionWallet) {
+				// Fallback to session wallet signing
+				signature = await sendAndConfirmTransaction(
+					this.connection,
+					transaction,
+					[this.sessionWallet],
+					{ commitment: 'confirmed' }
+				);
+			} else {
+				throw new Error('No signing method available');
+			}
 
 			console.log('[MAGICBLOCK] Position closed:', signature);
 			return signature;
@@ -337,11 +551,12 @@ export class MagicBlockClient {
 	}
 
 	async getBalance(): Promise<number> {
-		if (!this.sessionWallet) {
+		const currentWallet = this.getCurrentWallet();
+		if (!currentWallet) {
 			return 0;
 		}
 
-		const balance = await this.connection.getBalance(this.sessionWallet.publicKey);
+		const balance = await this.connection.getBalance(currentWallet.publicKey);
 		return balance / LAMPORTS_PER_SOL;
 	}
 

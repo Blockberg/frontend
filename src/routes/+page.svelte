@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { HermesClient } from '@pythnetwork/hermes-client';
-	import { magicBlockClient, PositionDirection } from '$lib/magicblock';
+	import { magicBlockClient, PositionDirection, TRADING_PAIRS } from '$lib/magicblock';
+	import { walletStore } from '$lib/wallet/stores';
+	import WalletButton from '$lib/wallet/WalletButton.svelte';
 
 	const hermesClient = new HermesClient('https://hermes.pyth.network', {});
 
@@ -59,6 +61,73 @@
 	let walletBalance = 0;
 	let magicBlockStatus = 'Initializing...';
 	let isOnChainMode = true;
+	let connectedWallet: any = null;
+	let accountsInitialized: { [pairIndex: number]: boolean } = {};
+	let showInitializeModal = false;
+
+	// Subscribe to wallet changes
+	walletStore.subscribe(wallet => {
+		connectedWallet = wallet;
+		if (wallet.connected && wallet.publicKey) {
+			walletAddress = wallet.publicKey.toBase58();
+			magicBlockClient.setConnectedWallet(wallet.adapter);
+			updateWalletStatus();
+		} else {
+			walletAddress = '';
+			magicBlockClient.setConnectedWallet(null);
+			walletBalance = 0;
+			accountsInitialized = {};
+			magicBlockStatus = 'Ready - Connect wallet to trade';
+		}
+	});
+
+	async function updateWalletStatus() {
+		try {
+			walletBalance = await magicBlockClient.getBalance();
+			accountsInitialized = await magicBlockClient.getAccountStatus();
+			
+			// Update status based on account initialization
+			const totalPairs = Object.keys(TRADING_PAIRS).length;
+			const initializedPairs = Object.values(accountsInitialized).filter(Boolean).length;
+			
+			if (initializedPairs === 0) {
+				magicBlockStatus = 'Connected - Initialize accounts to trade';
+			} else if (initializedPairs === totalPairs) {
+				magicBlockStatus = `Connected - All ${totalPairs} pairs initialized`;
+			} else {
+				magicBlockStatus = `Connected - ${initializedPairs}/${totalPairs} pairs initialized`;
+			}
+		} catch (error) {
+			console.error('[WALLET] Failed to update wallet status:', error);
+			magicBlockStatus = 'Connected - Status check failed';
+		}
+	}
+
+	async function initializeAllAccounts() {
+		if (!connectedWallet?.connected) {
+			alert('Please connect your wallet first');
+			return;
+		}
+
+		try {
+			magicBlockStatus = 'Initializing trading accounts...';
+			
+			// Initialize accounts for all pairs that aren't already initialized
+			for (const [pairName, pairIndex] of Object.entries(TRADING_PAIRS)) {
+				if (!accountsInitialized[pairIndex]) {
+					console.log(`[MAGICBLOCK] Initializing account for ${pairName} (index: ${pairIndex})`);
+					const signature = await magicBlockClient.initializeAccount(pairIndex);
+					console.log(`[MAGICBLOCK] ${pairName} account initialized:`, signature);
+				}
+			}
+
+			// Update status after initialization
+			await updateWalletStatus();
+		} catch (error: any) {
+			console.error('[MAGICBLOCK] Failed to initialize accounts:', error);
+			magicBlockStatus = `Initialization failed: ${error.message}`;
+		}
+	}
 
 	function updateTime() {
 		currentTime = new Date().toLocaleTimeString();
@@ -177,6 +246,11 @@
 	}
 
 	async function openPosition(direction: 'LONG' | 'SHORT') {
+		if (!connectedWallet?.connected) {
+			alert('Please connect your wallet to open positions');
+			return;
+		}
+
 		const currentPrice = prices[selectedTab].price;
 		const size = parseFloat(positionSize);
 
@@ -231,7 +305,7 @@
 		const position = activePositions.find(p => p.id === id);
 		if (!position) return;
 
-		if (isOnChainMode) {
+		if (isOnChainMode && connectedWallet?.connected) {
 			try {
 				magicBlockStatus = 'Closing position on-chain...';
 				const txSig = await magicBlockClient.closePosition(id.toString());
@@ -271,17 +345,25 @@
 	}
 
 	async function requestAirdrop() {
+		if (!connectedWallet?.connected) {
+			alert('Please connect your wallet first');
+			return;
+		}
+
 		try {
 			magicBlockStatus = 'Requesting airdrop...';
-			const signature = await magicBlockClient.requestAirdrop(1);
+			// Request airdrop to the connected wallet
+			const signature = await magicBlockClient.connection.requestAirdrop(
+				connectedWallet.publicKey,
+				1000000000 // 1 SOL
+			);
 			magicBlockStatus = `Airdrop sent: ${signature.substring(0, 8)}...`;
 			console.log('[AIRDROP] Sent:', signature);
 
 			// Poll balance every 2 seconds to update UI
 			const pollInterval = setInterval(async () => {
-				const newBalance = await magicBlockClient.getBalance();
-				if (newBalance > walletBalance) {
-					walletBalance = newBalance;
+				await updateWalletStatus();
+				if (walletBalance > 0.5) {
 					magicBlockStatus = `Wallet funded (${walletBalance.toFixed(4)} SOL)`;
 					clearInterval(pollInterval);
 				}
@@ -318,24 +400,28 @@
 		});
 	}
 
-	onMount(async () => {
+	onMount(() => {
 		console.log('[APP] Initializing Blockberg Terminal with Pyth Network + MagicBlock...');
 		console.log('[APP] Using official @pythnetwork/hermes-client package');
 
-		try {
-			magicBlockStatus = 'Initializing session wallet...';
-			const sessionWallet = await magicBlockClient.initializeSessionWallet();
-			walletAddress = sessionWallet.publicKey.toBase58();
-			walletBalance = await magicBlockClient.getBalance();
-			magicBlockStatus = `Wallet ready (${walletBalance.toFixed(4)} SOL)`;
-			console.log('[MAGICBLOCK] Session wallet initialized:', walletAddress);
-			console.log('[MAGICBLOCK] Balance:', walletBalance, 'SOL');
-			magicBlockClient.setAdminWallet('2ACsdGiDz4qhCNTkbkPcHNEk5DuG9cfyV4o1j9sidxhFKhyyXWg4GgHutwQrnXBovSRA9ixfVWwYWzNH8hHmbDy2');
-		} catch (error) {
-			console.error('[MAGICBLOCK] Failed to initialize:', error);
-			magicBlockStatus = 'Initialization failed';
-		}
+		// Initialize session wallet as fallback but don't set as primary wallet
+		const initializeWallet = async () => {
+			try {
+				magicBlockStatus = 'Initializing session wallet fallback...';
+				await magicBlockClient.initializeSessionWallet();
+				magicBlockClient.setAdminWallet('2ACsdGiDz4qhCNTkbkPcHNEk5DuG9cfyV4o1j9sidxhFKhyyXWg4GgHutwQrnXBovSRA9ixfVWwYWzNH8hHmbDy2');
+				
+				// If no wallet is connected, show default status
+				if (!connectedWallet?.connected) {
+					magicBlockStatus = 'Ready - Connect wallet to trade';
+				}
+			} catch (error) {
+				console.error('[MAGICBLOCK] Failed to initialize:', error);
+				magicBlockStatus = 'Initialization failed';
+			}
+		};
 
+		initializeWallet();
 		fetchNews();
 		startPythPriceUpdates();
 		updateTime();
@@ -378,13 +464,19 @@
 		<div class="magicblock-status">
 			<span class="status-label">MAGICBLOCK:</span>
 			<span class="status-value">{magicBlockStatus}</span>
-			{#if walletAddress}
+			{#if connectedWallet?.connected}
 				<span class="wallet-addr">{walletAddress.substring(0, 4)}...{walletAddress.substring(walletAddress.length - 4)}</span>
 				<span class="wallet-balance">{walletBalance.toFixed(4)} SOL</span>
 				{#if walletBalance < 0.1}
 					<button class="airdrop-btn" on:click={requestAirdrop}>AIRDROP</button>
 				{/if}
+				{#if Object.values(accountsInitialized).some(initialized => !initialized)}
+					<button class="initialize-btn" on:click={initializeAllAccounts}>INITIALIZE</button>
+				{/if}
 			{/if}
+		</div>
+		<div class="wallet-section">
+			<WalletButton />
 		</div>
 		<div class="competition-timer">
 			<span class="timer-label">ROUND ENDS:</span>
@@ -589,7 +681,7 @@
 		background: #000;
 		color: #ff9500;
 		font-family: 'Courier New', 'Lucida Console', monospace;
-		overflow: hidden;
+		overflow: auto;
 	}
 
 	.bloomberg {
@@ -739,6 +831,25 @@
 		transform: scale(1.05);
 	}
 
+	.initialize-btn {
+		background: #00ff00;
+		color: #000;
+		border: none;
+		padding: 4px 12px;
+		font-size: 10px;
+		font-weight: bold;
+		cursor: pointer;
+		margin-left: 8px;
+		font-family: 'Courier New', monospace;
+		letter-spacing: 1px;
+		transition: all 0.2s ease;
+	}
+
+	.initialize-btn:hover {
+		background: #33ff33;
+		transform: scale(1.05);
+	}
+
 	.competition-timer {
 		display: flex;
 		align-items: center;
@@ -760,6 +871,11 @@
 		color: #00ff00;
 		font-weight: bold;
 		font-family: 'Courier New', monospace;
+	}
+
+	.wallet-section {
+		display: flex;
+		align-items: center;
 	}
 
 	.clock {
