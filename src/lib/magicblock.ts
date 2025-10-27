@@ -51,9 +51,13 @@ export class MagicBlockClient {
 	}
 
 	// Set connected wallet adapter
-	setConnectedWallet(wallet: Adapter | null) {
+	async setConnectedWallet(wallet: Adapter | null) {
 		this.connectedWallet = wallet;
 		console.log('[MAGICBLOCK] Connected wallet set:', wallet?.name || 'None');
+
+		if (wallet?.connected && wallet.publicKey) {
+			await this.initializeEntity();
+		}
 	}
 
 	// Get current wallet (prioritize connected wallet over session wallet)
@@ -279,12 +283,13 @@ export class MagicBlockClient {
 	}
 
 	async initializeEntity(): Promise<void> {
-		if (!this.sessionWallet) return;
+		const currentWallet = this.getCurrentWallet();
+		if (!currentWallet) return;
 
 		try {
 			this.entityPda = FindEntityPda({
 				worldId: WORLD_ID,
-				seed: Buffer.from(this.sessionWallet.publicKey.toBytes()),
+				seed: Buffer.from(currentWallet.publicKey.toBytes()),
 			});
 			console.log('[MAGICBLOCK] Entity PDA:', this.entityPda.toBase58());
 
@@ -339,6 +344,104 @@ export class MagicBlockClient {
 			[Buffer.from('trading-account'), owner.toBuffer()],
 			COMPONENT_IDS.TRADING_ACCOUNT
 		);
+	}
+
+	async buySpot(pairIndex: number, usdtAmount: number, currentPrice: number): Promise<string> {
+		const currentWallet = this.getCurrentWallet();
+		if (!currentWallet) {
+			throw new Error('Wallet not connected');
+		}
+
+		const costInTokenIn = Math.floor(usdtAmount * 1e6);
+		const priceScaled = Math.floor(currentPrice * 1e6);
+
+		const [userAccountPDA] = this.getUserAccountPDA(currentWallet.publicKey, pairIndex);
+
+		const methodName = "global:buy";
+		const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(methodName));
+		const discriminator = new Uint8Array(hash).slice(0, 8);
+
+		const instructionData = Buffer.alloc(8 + 16);
+		Buffer.from(discriminator).copy(instructionData, 0);
+		instructionData.writeBigUInt64LE(BigInt(costInTokenIn), 8);
+		instructionData.writeBigUInt64LE(BigInt(priceScaled), 16);
+
+		const instruction = new TransactionInstruction({
+			keys: [
+				{ pubkey: userAccountPDA, isSigner: false, isWritable: true },
+				{ pubkey: currentWallet.publicKey, isSigner: true, isWritable: false },
+			],
+			programId: PAPER_TRADING_PROGRAM_ID,
+			data: instructionData
+		});
+
+		const transaction = new Transaction().add(instruction);
+		const latestBlockhash = await this.connection.getLatestBlockhash('confirmed');
+		transaction.recentBlockhash = latestBlockhash.blockhash;
+		transaction.feePayer = currentWallet.publicKey;
+
+		const signedTx = await currentWallet.signTransaction!(transaction);
+		const signature = await this.connection.sendRawTransaction(signedTx.serialize(), {
+			skipPreflight: false,
+			preflightCommitment: 'confirmed'
+		});
+
+		await this.connection.confirmTransaction({
+			signature,
+			blockhash: latestBlockhash.blockhash,
+			lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+		}, 'confirmed');
+
+		return signature;
+	}
+
+	async sellSpot(pairIndex: number, tokenAmount: number, currentPrice: number): Promise<string> {
+		const currentWallet = this.getCurrentWallet();
+		if (!currentWallet) {
+			throw new Error('Wallet not connected');
+		}
+
+		const valueInTokenIn = Math.floor(tokenAmount * currentPrice * 1e6);
+		const priceScaled = Math.floor(currentPrice * 1e6);
+
+		const [userAccountPDA] = this.getUserAccountPDA(currentWallet.publicKey, pairIndex);
+
+		const methodName = "global:sell";
+		const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(methodName));
+		const discriminator = new Uint8Array(hash).slice(0, 8);
+
+		const instructionData = Buffer.alloc(8 + 16);
+		Buffer.from(discriminator).copy(instructionData, 0);
+		instructionData.writeBigUInt64LE(BigInt(valueInTokenIn), 8);
+		instructionData.writeBigUInt64LE(BigInt(priceScaled), 16);
+
+		const instruction = new TransactionInstruction({
+			keys: [
+				{ pubkey: userAccountPDA, isSigner: false, isWritable: true },
+				{ pubkey: currentWallet.publicKey, isSigner: true, isWritable: false },
+			],
+			programId: PAPER_TRADING_PROGRAM_ID,
+			data: instructionData
+		});
+
+		const transaction = new Transaction().add(instruction);
+		const latestBlockhash = await this.connection.getLatestBlockhash('confirmed');
+		transaction.recentBlockhash = latestBlockhash.blockhash;
+		transaction.feePayer = currentWallet.publicKey;
+
+		const signedTx = await currentWallet.signTransaction!(transaction);
+		const signature = await this.connection.sendRawTransaction(signedTx.serialize(), {
+			skipPreflight: false,
+			preflightCommitment: 'confirmed'
+		});
+
+		await this.connection.confirmTransaction({
+			signature,
+			blockhash: latestBlockhash.blockhash,
+			lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+		}, 'confirmed');
+
+		return signature;
 	}
 
 	async getPositionPDA(
@@ -431,14 +534,16 @@ export class MagicBlockClient {
 		}
 
 		const requiredBalance = requiredTokenIn / 1e6; // Convert back to readable format for comparison
+		const epsilon = 0.01; // Allow 0.01 USDT tolerance for floating point precision
 		console.log('[MAGICBLOCK] Balance check:', {
 			available: accountData.tokenInBalance,
 			required: requiredBalance,
+			difference: accountData.tokenInBalance - requiredBalance,
 			size,
 			currentPrice
 		});
 
-		if (accountData.tokenInBalance < requiredBalance) {
+		if (accountData.tokenInBalance < requiredBalance - epsilon) {
 			throw new Error(`Insufficient balance. Required: ${requiredBalance.toFixed(2)} USDT, Available: ${accountData.tokenInBalance.toFixed(2)} USDT`);
 		}
 
@@ -1311,6 +1416,68 @@ export class MagicBlockClient {
 		} catch (error) {
 			console.warn('[MAGICBLOCK] Failed to fetch leaderboard:', error);
 			return [];
+		}
+	}
+
+	async fetchCompetitionData(): Promise<{ startTime: Date; endTime: Date; totalParticipants: number; prizePool: number; isActive: boolean; name: string } | null> {
+		if (!this.competitionEntity) {
+			return null;
+		}
+
+		try {
+			console.log('[MAGICBLOCK] Fetching competition data...');
+
+			const [componentPda] = PublicKey.findProgramAddressSync(
+				[Buffer.from('component'), this.competitionEntity.toBuffer(), COMPONENT_IDS.COMPETITION.toBuffer()],
+				COMPONENT_IDS.COMPETITION
+			);
+
+			const accountInfo = await this.connection.getAccountInfo(componentPda);
+			if (!accountInfo) {
+				console.warn('[MAGICBLOCK] Competition component not found');
+				return null;
+			}
+
+			const data = accountInfo.data;
+			let offset = 8;
+
+			const authorityBytes = data.slice(offset, offset + 32);
+			offset += 32;
+
+			const startTimeBuffer = data.slice(offset, offset + 8);
+			const startTime = new DataView(startTimeBuffer.buffer, startTimeBuffer.byteOffset).getBigInt64(0, true);
+			offset += 8;
+
+			const endTimeBuffer = data.slice(offset, offset + 8);
+			const endTime = new DataView(endTimeBuffer.buffer, endTimeBuffer.byteOffset).getBigInt64(0, true);
+			offset += 8;
+
+			const totalParticipantsBuffer = data.slice(offset, offset + 8);
+			const totalParticipants = new DataView(totalParticipantsBuffer.buffer, totalParticipantsBuffer.byteOffset).getBigUint64(0, true);
+			offset += 8;
+
+			const prizePoolBuffer = data.slice(offset, offset + 8);
+			const prizePool = new DataView(prizePoolBuffer.buffer, prizePoolBuffer.byteOffset).getBigUint64(0, true);
+			offset += 8;
+
+			const isActive = data[offset] === 1;
+			offset += 1;
+
+			const nameLength = data.readUInt32LE(offset);
+			offset += 4;
+			const name = data.slice(offset, offset + nameLength).toString('utf-8');
+
+			return {
+				startTime: new Date(Number(startTime) * 1000),
+				endTime: new Date(Number(endTime) * 1000),
+				totalParticipants: Number(totalParticipants),
+				prizePool: Number(prizePool),
+				isActive,
+				name
+			};
+		} catch (error) {
+			console.error('[MAGICBLOCK] Failed to fetch competition data:', error);
+			return null;
 		}
 	}
 

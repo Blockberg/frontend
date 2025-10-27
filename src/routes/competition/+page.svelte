@@ -5,8 +5,8 @@
 	import WalletButton from '$lib/wallet/WalletButton.svelte';
 
 	let currentTime = new Date().toLocaleTimeString();
-	let competitionEndTime = new Date(Date.now() + 2538000);
-	let timeRemaining = '00:42:18';
+	let competitionEndTime = new Date(Date.now() + 60 * 60 * 1000);
+	let timeRemaining = '01:00:00';
 
 	let leaderboard: any[] = [];
 
@@ -43,9 +43,14 @@
 
 	async function checkCompetitionStatus() {
 		try {
-			// Check if user has already joined the competition
-			// This would query the competition component to see if user has a trading account
-			competitionStatus = 'Ready to join competition';
+			const compData = await magicBlockClient.fetchCompetitionData();
+			if (compData) {
+				competitionEndTime = compData.endTime;
+				competitionStats.totalTrades = compData.totalParticipants;
+				competitionStatus = compData.isActive ? 'Ready to join competition' : 'Competition not active';
+			} else {
+				competitionStatus = 'Ready to join competition';
+			}
 		} catch (error) {
 			console.error('[COMPETITION] Failed to check status:', error);
 			competitionStatus = 'Status check failed';
@@ -123,18 +128,33 @@
 
 	onMount(async () => {
 		console.log('[COMPETITION] Initializing competition page...');
-		
-		// Initialize MagicBlock client
+
 		try {
 			await magicBlockClient.initializeSessionWallet();
 		} catch (error) {
 			console.error('[COMPETITION] Failed to initialize MagicBlock:', error);
 		}
 
+		try {
+			const compData = await magicBlockClient.fetchCompetitionData();
+			if (compData) {
+				competitionEndTime = compData.endTime;
+				console.log('[COMPETITION] Competition data:', {
+					startTime: compData.startTime,
+					endTime: compData.endTime,
+					name: compData.name,
+					participants: compData.totalParticipants
+				});
+			} else {
+				console.log('[COMPETITION] No competition data found, using default 60min timer');
+			}
+		} catch (error) {
+			console.error('[COMPETITION] Failed to fetch competition data:', error);
+		}
+
 		updateTime();
 		const timeInterval = setInterval(updateTime, 1000);
-		
-		// Fetch initial data
+
 		await fetchLeaderboard();
 		await fetchRecentActivity();
 		

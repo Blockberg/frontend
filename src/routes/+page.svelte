@@ -314,7 +314,7 @@
 				}, 2000);
 			} catch (error: any) {
 				console.error('[TRADING] Failed to open position:', error);
-				magicBlockStatus = `Error - check console`;
+				magicBlockStatus = `Failed to open position: ${error.message || 'Transaction failed'}`;
 				return;
 			}
 		}
@@ -433,7 +433,7 @@
 			setTimeout(() => clearInterval(pollInterval), 60000);
 		} catch (error: any) {
 			console.error('[AIRDROP] Failed:', error);
-			magicBlockStatus = `Airdrop failed - check console`;
+			magicBlockStatus = `Airdrop failed: ${error.message || 'Request failed'}`;
 		}
 	}
 
@@ -448,8 +448,8 @@
 		activePositions = activePositions.map(position => {
 			const currentPrice = prices[position.symbol].price;
 			const pnl = position.direction === 'LONG'
-				? ((currentPrice - position.entryPrice) / position.entryPrice) * position.size
-				: ((position.entryPrice - currentPrice) / position.entryPrice) * position.size;
+				? position.size * ((currentPrice - position.entryPrice) / position.entryPrice)
+				: position.size * ((position.entryPrice - currentPrice) / position.entryPrice);
 
 			if (position.takeProfit &&
 				((position.direction === 'LONG' && currentPrice >= position.takeProfit) ||
@@ -787,7 +787,7 @@
 												</span>
 											</div>
 											<div class="position-row">
-												<span class={((position.direction === 'LONG' ? (prices[position.pairSymbol]?.price || position.entryPrice) - position.entryPrice : position.entryPrice - (prices[position.pairSymbol]?.price || position.entryPrice)) >= 0) ? 'pnl-up' : 'pnl-down'}>
+												<span class={((position.direction === 'LONG' ? (prices[position.pairSymbol]?.price || position.entryPrice) - position.entryPrice : position.entryPrice - (prices[position.pairSymbol]?.price || position.entryPrice)) * position.amountTokenOut >= 0) ? 'pnl-up' : 'pnl-down'}>
 													P&L: ${((position.direction === 'LONG' ? (prices[position.pairSymbol]?.price || position.entryPrice) - position.entryPrice : position.entryPrice - (prices[position.pairSymbol]?.price || position.entryPrice)) * position.amountTokenOut).toFixed(2)}
 												</span>
 											</div>
