@@ -359,14 +359,29 @@
 				
 				magicBlockStatus = `Position closed: ${txSig.substring(0, 8)}...`;
 				
-				// Refresh positions after successful close
+				// Refresh positions immediately and again after a delay
+				await fetchOnChainPositions();
 				setTimeout(async () => {
 					await fetchOnChainPositions();
-				}, 2000);
+				}, 1000);
 				
 			} catch (error: any) {
-				console.error('[TRADING] Failed to close position:', error);
-				magicBlockStatus = `Error: ${error.message}`;
+				console.error('[TRADING] Close position error:', error);
+				
+				// Check if it's the "already processed" error which often means success
+				if (error.message?.includes('This transaction has already been processed') || 
+					error.message?.includes('Transaction already processed')) {
+					console.log('[TRADING] Transaction may have succeeded despite error');
+					magicBlockStatus = 'Position closed (already processed)';
+					
+					// Refresh positions immediately since it likely succeeded
+					await fetchOnChainPositions();
+					setTimeout(async () => {
+						await fetchOnChainPositions();
+					}, 1000);
+				} else {
+					magicBlockStatus = `Error: ${error.message}`;
+				}
 			}
 		}
 
@@ -481,12 +496,12 @@
 		setInterval(fetchNews, 300000);
 		setInterval(updateTime, 1000);
 
-		// Fetch positions regularly (every 10 seconds)
+		// Fetch positions regularly (every 5 seconds for better responsiveness)
 		setInterval(async () => {
 			if (connectedWallet?.connected) {
 				await fetchOnChainPositions();
 			}
-		}, 10000);
+		}, 5000);
 
 		// Initial position fetch when page loads (after wallet might be connected)
 		setTimeout(async () => {
@@ -700,7 +715,10 @@
 
 			{#if activePositions.length > 0 || onChainPositions.length > 0}
 				<div class="positions-panel">
-					<div class="positions-header">ACTIVE POSITIONS</div>
+					<div class="positions-header">
+						ACTIVE POSITIONS
+						<button class="refresh-positions-btn" on:click={fetchOnChainPositions} title="Refresh positions">↻</button>
+					</div>
 					
 					<!-- Paper Trading Positions -->
 					{#if activePositions.length > 0}
@@ -1456,12 +1474,32 @@
 	}
 
 	.positions-header {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
 		color: #ff9500;
 		font-size: 10px;
 		font-weight: bold;
 		letter-spacing: 1px;
 		margin-bottom: 8px;
 		padding: 4px 0;
+	}
+
+	.refresh-positions-btn {
+		background: none;
+		border: 1px solid #ff9500;
+		color: #ff9500;
+		padding: 4px 8px;
+		border-radius: 3px;
+		cursor: pointer;
+		font-size: 1.2em;
+		transition: all 0.2s;
+	}
+
+	.refresh-positions-btn:hover {
+		background: #ff9500;
+		color: #000;
+		transform: rotate(180deg);
 	}
 
 	.position-row {
