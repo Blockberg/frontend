@@ -135,25 +135,19 @@ export class MagicBlockClient {
 		}
 
 		try {
-			console.log('[MAGICBLOCK] Initializing trading account for pair', pairIndex);
-
-			// Use MagicBlock connection only
-			
 			const [userAccountPDA] = this.getUserAccountPDA(currentWallet.publicKey, pairIndex);
 			const [configPDA] = this.getConfigPDA();
-			
-			// Check if account already exists
+
 			const existingAccount = await this.connection.getAccountInfo(userAccountPDA);
 			if (existingAccount) {
-				console.log('[MAGICBLOCK] Account already initialized for pair', pairIndex);
 				return 'account_already_exists';
 			}
-			
-			// Get treasury from config
+
 			const configAccountInfo = await this.connection.getAccountInfo(configPDA);
 			if (!configAccountInfo) {
-				throw new Error('Config account not found');
+				throw new Error('Config account not initialized. Contact admin.');
 			}
+
 			const treasuryPubkey = new PublicKey(configAccountInfo.data.subarray(40, 72));
 
 			const entryFeeScaled = Math.floor(entryFee * LAMPORTS_PER_SOL);

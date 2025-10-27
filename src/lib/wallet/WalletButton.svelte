@@ -31,8 +31,16 @@
 		try {
 			await walletManager.connect(walletName);
 			closeModal();
-		} catch (error) {
-			console.error('Failed to connect wallet:', error);
+		} catch (error: any) {
+			if (error?.message?.includes('not installed')) {
+				alert(error.message);
+			} else if (error?.message?.includes('User rejected') || error?.message?.includes('not been authorized')) {
+				alert('Connection cancelled. Please approve in your wallet.');
+			} else if (error?.message?.includes('Unexpected error')) {
+				alert('Connection failed. Make sure Phantom is unlocked and try again.');
+			} else {
+				alert(`Failed to connect: ${error?.message || 'Unknown error'}`);
+			}
 		}
 	}
 
@@ -40,7 +48,6 @@
 		try {
 			await walletManager.disconnect();
 		} catch (error) {
-			console.error('Failed to disconnect wallet:', error);
 		}
 	}
 

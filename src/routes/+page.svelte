@@ -60,6 +60,8 @@
 	let connectedWallet: any = null;
 	let accountsInitialized: { [pairIndex: number]: boolean } = {};
 	let showInitializeModal = false;
+	let lastFetchTime = 0;
+	const FETCH_COOLDOWN = 5000;
 	let mockTokenBalances: { [pairIndex: number]: { tokenInBalance: number; tokenOutBalance: number; totalPositions: number } } = {};
 
 	// Subscribe to wallet changes
@@ -84,12 +86,15 @@
 			return;
 		}
 
+		const now = Date.now();
+		if (now - lastFetchTime < FETCH_COOLDOWN) {
+			return;
+		}
+		lastFetchTime = now;
+
 		try {
-			console.log('[WALLET] Fetching on-chain positions...');
 			onChainPositions = await magicBlockClient.fetchPositions();
-			console.log('[WALLET] Found', onChainPositions.length, 'on-chain positions:', onChainPositions);
 		} catch (error) {
-			console.error('[WALLET] Failed to fetch on-chain positions:', error);
 			onChainPositions = [];
 		}
 	}

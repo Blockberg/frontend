@@ -49,7 +49,7 @@ class WalletManager {
 			walletStore.update(state => ({ ...state, connecting: true }));
 
 			let adapter: Adapter;
-			
+
 			if (walletName) {
 				const foundAdapter = this.wallets.find(w => w.name === walletName);
 				if (!foundAdapter) {
@@ -57,15 +57,21 @@ class WalletManager {
 				}
 				adapter = foundAdapter;
 			} else {
-				// Default to Phantom if no wallet specified
 				adapter = this.wallets.find(w => w.name === 'Phantom') || this.wallets[0];
+			}
+
+
+			if (adapter.readyState === 'NotDetected') {
+				throw new Error(`${adapter.name} wallet is not installed. Please install it from your browser's extension store.`);
+			}
+
+			if (this.selectedWallet && this.selectedWallet !== adapter) {
+				await this.disconnect();
 			}
 
 			this.selectedWallet = adapter;
 
-			// Setup event listeners
-			adapter.on('connect', () => {
-				console.log('[WALLET] Connected to', adapter.name);
+			const handleConnect = () => {
 				walletStore.update(state => ({
 					...state,
 					adapter,
@@ -74,12 +80,10 @@ class WalletManager {
 					publicKey: adapter.publicKey,
 					wallet: adapter
 				}));
-				// Save wallet selection
 				localStorage.setItem('solana-wallet', adapter.name);
-			});
+			};
 
-			adapter.on('disconnect', () => {
-				console.log('[WALLET] Disconnected from', adapter.name);
+			const handleDisconnect = () => {
 				walletStore.update(state => ({
 					...state,
 					adapter: null,
@@ -89,18 +93,38 @@ class WalletManager {
 					wallet: null
 				}));
 				localStorage.removeItem('solana-wallet');
-			});
+			};
 
-			adapter.on('error', (error) => {
-				console.error('[WALLET] Error:', error);
+			const handleError = (error: any) => {
 				walletStore.update(state => ({ ...state, connecting: false }));
-			});
+			};
 
-			// Connect to wallet
-			await adapter.connect();
+			adapter.removeAllListeners();
+			adapter.on('connect', handleConnect);
+			adapter.on('disconnect', handleDisconnect);
+			adapter.on('error', handleError);
+
+			try {
+				if (!adapter.connected) {
+					await adapter.connect();
+				} else {
+					handleConnect();
+				}
+			} catch (connectError: any) {
+				walletStore.update(state => ({ ...state, connecting: false }));
+
+				if (connectError?.message?.includes('The source')) {
+					throw new Error('not been authorized');
+				}
+
+				if (connectError?.message?.includes('User rejected')) {
+					throw new Error('User rejected the connection request');
+				}
+
+				throw connectError;
+			}
 
 		} catch (error) {
-			console.error('[WALLET] Failed to connect:', error);
 			walletStore.update(state => ({ ...state, connecting: false }));
 			throw error;
 		}
@@ -147,9 +171,9 @@ class WalletManager {
 		const savedWallet = localStorage.getItem('solana-wallet');
 		if (savedWallet) {
 			try {
+				await new Promise(resolve => setTimeout(resolve, 500));
 				await this.connect(savedWallet as WalletName);
 			} catch (error) {
-				console.log('[WALLET] Auto-connect failed:', error);
 				localStorage.removeItem('solana-wallet');
 			}
 		}
