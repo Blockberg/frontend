@@ -1471,6 +1471,9 @@
 		background: #000;
 		border-top: 1px solid #333;
 		padding: 8px;
+		max-height: 300px;
+		overflow-y: auto;
+		overflow-x: hidden;
 	}
 
 	.positions-header {
