@@ -1135,14 +1135,12 @@ export class MagicBlockClient {
 		// Try to fetch MagicBlock positions first
 		if (this.entityPda) {
 			try {
-				console.log('[MAGICBLOCK] Fetching MagicBlock positions...');
-				
 				const positionAccounts = await this.connection.getProgramAccounts(COMPONENT_IDS.POSITION, {
 					filters: [
 						{
 							memcmp: {
-								offset: 8, // Skip discriminator
-								bytes: this.entityPda.toBase58() // Filter by entity
+								offset: 8,
+								bytes: this.entityPda.toBase58()
 							}
 						}
 					]
@@ -1157,68 +1155,32 @@ export class MagicBlockClient {
 							data: data.toString('hex').substring(0, 100) + '...'
 						});
 					} catch (parseError) {
-						console.warn('[MAGICBLOCK] Failed to parse MagicBlock position:', parseError);
 					}
 				}
 
-				console.log('[MAGICBLOCK] Found', positions.length, 'MagicBlock positions');
 			} catch (error) {
-				console.warn('[MAGICBLOCK] Failed to fetch MagicBlock positions:', error);
 			}
 		}
 
 		// Fetch direct contract positions using MagicBlock rollup only
 		try {
-			console.log('[MAGICBLOCK] Fetching contract positions via MagicBlock rollup...');
-			console.log('[MAGICBLOCK] Current wallet:', currentWallet.publicKey.toBase58());
+			const positionAccountSize = 104;
 
-			// Use MagicBlock rollup connection - all positions are on the rollup
-			console.log('[MAGICBLOCK] Getting all program accounts via MagicBlock rollup...');
-			const allAccounts = await this.connection.getProgramAccounts(PAPER_TRADING_PROGRAM_ID);
-			console.log('[MAGICBLOCK] Found', allAccounts.length, 'total program accounts via MagicBlock rollup');
-
-			// Debug: check what account sizes we have
-			const accountSizes = new Map();
-			allAccounts.forEach(account => {
-				const size = account.account.data.length;
-				accountSizes.set(size, (accountSizes.get(size) || 0) + 1);
+			const allAccounts = await this.connection.getProgramAccounts(PAPER_TRADING_PROGRAM_ID, {
+				filters: [
+					{
+						dataSize: positionAccountSize
+					},
+					{
+						memcmp: {
+							offset: 8,
+							bytes: currentWallet.publicKey.toBase58()
+						}
+					}
+				]
 			});
-			console.log('[MAGICBLOCK] Account sizes found:', Array.from(accountSizes.entries()));
 
-			// Calculate expected sizes for different account types:
-			// UserAccount: discriminator(8) + owner(32) + pair_index(1) + token_in_balance(8) + token_out_balance(8) + total_positions(8) + created_at(8)
-			const userAccountSize = 80; // From debug: actual size is 80
-			// PositionAccount: From debug, actual size is 104 bytes
-			const positionAccountSize = 104; // From debug: actual size is 104
-			console.log('[MAGICBLOCK] UserAccount size (actual):', userAccountSize);
-			console.log('[MAGICBLOCK] PositionAccount size (actual):', positionAccountSize);
-
-			// Filter for position accounts by checking data size and structure
-			const directPositions = allAccounts.filter(accountInfo => {
-				const data = accountInfo.account.data;
-				
-				console.log('[MAGICBLOCK] Checking account:', accountInfo.pubkey.toBase58(), 'size:', data.length);
-				
-				// Check if it matches PositionAccount size
-				if (data.length !== positionAccountSize) {
-					console.log('[MAGICBLOCK] Size mismatch - not a PositionAccount (expected', positionAccountSize, ')');
-					return false;
-				}
-
-				// Check if owner matches (skip discriminator, owner starts at offset 8)
-				try {
-					const ownerBytes = data.subarray(8, 8 + 32);
-					const ownerPubkey = new PublicKey(ownerBytes);
-					const isOurAccount = ownerPubkey.equals(currentWallet.publicKey);
-					
-					console.log('[MAGICBLOCK] Account owner:', ownerPubkey.toBase58(), 'matches:', isOurAccount);
-					
-					return isOurAccount;
-				} catch (error) {
-					console.warn('[MAGICBLOCK] Failed to parse owner:', error);
-					return false;
-				}
-			});
+			const directPositions = allAccounts;
 
 			for (const accountInfo of directPositions) {
 				try {
@@ -1297,16 +1259,12 @@ export class MagicBlockClient {
 						});
 					}
 				} catch (parseError) {
-					console.warn('[MAGICBLOCK] Failed to parse direct position:', parseError);
 				}
 			}
 
-			console.log('[MAGICBLOCK] Found', directPositions.length, 'direct contract positions');
 		} catch (error) {
-			console.warn('[MAGICBLOCK] Failed to fetch direct contract positions:', error);
 		}
 
-		console.log('[MAGICBLOCK] Total positions found:', positions.length);
 		return positions;
 	}
 
