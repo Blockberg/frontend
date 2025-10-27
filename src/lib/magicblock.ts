@@ -560,6 +560,74 @@ export class MagicBlockClient {
 		return balance / LAMPORTS_PER_SOL;
 	}
 
+	// Get mock token balances for a specific trading pair
+	async getUserAccountData(pairIndex: number): Promise<{ tokenInBalance: number; tokenOutBalance: number; totalPositions: number } | null> {
+		const currentWallet = this.getCurrentWallet();
+		if (!currentWallet) {
+			return null;
+		}
+
+		try {
+			const [userAccountPDA] = this.getUserAccountPDA(currentWallet.publicKey, pairIndex);
+			const accountInfo = await this.connection.getAccountInfo(userAccountPDA);
+			
+			if (!accountInfo) {
+				return null;
+			}
+
+			// Parse the account data according to the UserAccount struct
+			const data = accountInfo.data;
+			
+			// Skip the 8-byte discriminator
+			let offset = 8;
+			
+			// Skip owner (32 bytes)
+			offset += 32;
+			
+			// Skip pair_index (1 byte)  
+			offset += 1;
+			
+			// Read token_in_balance (8 bytes, u64)
+			const tokenInBalanceRaw = data.readBigUInt64LE(offset);
+			offset += 8;
+			
+			// Read token_out_balance (8 bytes, u64)
+			const tokenOutBalanceRaw = data.readBigUInt64LE(offset);
+			offset += 8;
+			
+			// Read total_positions (8 bytes, u64)
+			const totalPositions = Number(data.readBigUInt64LE(offset));
+
+			// Convert to readable format (token_in has 6 decimals, token_out has 9 decimals)
+			const tokenInBalance = Number(tokenInBalanceRaw) / 1e6;  // USDT-like token
+			const tokenOutBalance = Number(tokenOutBalanceRaw) / 1e9;  // SOL/BTC/ETH-like token
+
+			return {
+				tokenInBalance,
+				tokenOutBalance,
+				totalPositions
+			};
+		} catch (error) {
+			console.error('[MAGICBLOCK] Failed to get user account data:', error);
+			return null;
+		}
+	}
+
+	// Get mock token balances for all initialized trading pairs
+	async getAllUserAccountData(): Promise<{ [pairIndex: number]: { tokenInBalance: number; tokenOutBalance: number; totalPositions: number } }> {
+		const accountData: { [pairIndex: number]: { tokenInBalance: number; tokenOutBalance: number; totalPositions: number } } = {};
+		
+		// Check all trading pairs
+		for (const [, pairIndex] of Object.entries(TRADING_PAIRS)) {
+			const data = await this.getUserAccountData(pairIndex);
+			if (data) {
+				accountData[pairIndex] = data;
+			}
+		}
+
+		return accountData;
+	}
+
 	async mintTrophyNFT(
 		rank: number,
 		winnerAddress: PublicKey,
@@ -584,7 +652,6 @@ export class MagicBlockClient {
 			new PublicKey('metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s')
 		);
 
-		const SETTLE_COMPETITION_PROGRAM_ID = SYSTEM_IDS.SETTLE_COMPETITION;
 
 		const associatedTokenAddress = await this.getAssociatedTokenAddress(
 			mintKeypair.publicKey,

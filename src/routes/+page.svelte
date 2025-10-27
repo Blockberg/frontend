@@ -46,6 +46,7 @@
 	let competitionEndTime = new Date(Date.now() + 3600000);
 	let timeRemaining = '';
 	let newsLoading = true;
+	let showAllNews = false;
 	let pythUpdateInterval: any = null;
 	let pythStatus = 'Initializing...';
 	let pythLastUpdate = 0;
@@ -64,6 +65,7 @@
 	let connectedWallet: any = null;
 	let accountsInitialized: { [pairIndex: number]: boolean } = {};
 	let showInitializeModal = false;
+	let mockTokenBalances: { [pairIndex: number]: { tokenInBalance: number; tokenOutBalance: number; totalPositions: number } } = {};
 
 	// Subscribe to wallet changes
 	walletStore.subscribe(wallet => {
@@ -85,6 +87,10 @@
 		try {
 			walletBalance = await magicBlockClient.getBalance();
 			accountsInitialized = await magicBlockClient.getAccountStatus();
+			
+			// Fetch mock token balances for all initialized accounts
+			mockTokenBalances = await magicBlockClient.getAllUserAccountData();
+			console.log('[WALLET] Mock token balances:', mockTokenBalances);
 			
 			// Update status based on account initialization
 			const totalPairs = Object.keys(TRADING_PAIRS).length;
@@ -123,6 +129,11 @@
 
 			// Update status after initialization
 			await updateWalletStatus();
+			
+			// Refresh mock token balances after initialization
+			setTimeout(async () => {
+				await updateWalletStatus();
+			}, 3000); // Wait 3 seconds for accounts to be fully initialized
 		} catch (error: any) {
 			console.error('[MAGICBLOCK] Failed to initialize accounts:', error);
 			magicBlockStatus = `Initialization failed: ${error.message}`;
@@ -535,14 +546,22 @@
 
 	<div class="main-grid">
 		<div class="panel news-panel">
-			<div class="panel-header">TOP NEWS - CRYPTO</div>
+			<div class="panel-header">
+				TOP NEWS - CRYPTO
+				{#if !newsLoading && news.length > 8}
+					<span class="news-toggle" on:click={() => showAllNews = !showAllNews}>
+						{showAllNews ? '▲ COLLAPSE' : '▼ SHOW ALL'}
+					</span>
+				{/if}
+			</div>
 			<div class="news-list">
 				{#if newsLoading}
 					<div class="loading-state">Loading news from CryptoCompare API...</div>
 				{:else if news.length === 0}
 					<div class="error-state">Failed to load news. Check console for details.</div>
 				{:else}
-					{#each news as article, i}
+					{@const displayedNews = showAllNews ? news : news.slice(0, 8)}
+					{#each displayedNews as article, i}
 						<a href={article.url} target="_blank" rel="noopener noreferrer" class="news-item">
 							<div class="news-meta">
 								<span class="news-number">{i + 1}</span>
@@ -552,6 +571,13 @@
 							<div class="news-title">{article.title}</div>
 						</a>
 					{/each}
+					{#if !showAllNews && news.length > 8}
+						<div class="news-more">
+							<button class="show-more-btn" on:click={() => showAllNews = true}>
+								Show {news.length - 8} more articles ▼
+							</button>
+						</div>
+					{/if}
 				{/if}
 			</div>
 		</div>
@@ -644,31 +670,88 @@
 
 		<div class="panel leaderboard-panel">
 			<div class="panel-header">
-				COMPETITION LEADERBOARD
-				<span class="leaderboard-stats">
-					<span>WIN RATE: {totalTrades > 0 ? ((winningTrades / totalTrades) * 100).toFixed(1) : 0}%</span>
-					<span class={totalPnL >= 0 ? 'pnl-up' : 'pnl-down'}>
-						YOUR P&L: ${totalPnL.toFixed(2)}
-					</span>
+				{selectedTab}/USDT BALANCE
+				<span class="balance-refresh" on:click={updateWalletStatus}>
+					↻ REFRESH
 				</span>
 			</div>
-			<div class="leaderboard-table">
-				<div class="table-header">
-					<span>RANK</span>
-					<span>TRADER</span>
-					<span>P&L</span>
-					<span>TRADES</span>
+			{#if connectedWallet?.connected}
+				{@const currentPairIndex = TRADING_PAIRS[selectedTab]}
+				<div class="token-balances">
+					{#if mockTokenBalances[currentPairIndex]}
+						<div class="balance-row">
+							<div class="pair-info">
+								<span class="pair-name">{selectedTab}/USDT</span>
+								<span class="pair-status">INITIALIZED</span>
+							</div>
+							<div class="balance-amounts">
+								<div class="token-balance">
+									<span class="token-label">USDT:</span>
+									<span class="token-amount">{mockTokenBalances[currentPairIndex].tokenInBalance.toFixed(2)}</span>
+								</div>
+								<div class="token-balance">
+									<span class="token-label">{selectedTab}:</span>
+									<span class="token-amount">{mockTokenBalances[currentPairIndex].tokenOutBalance.toFixed(4)}</span>
+								</div>
+								<div class="token-balance positions-count">
+									<span class="token-label">POSITIONS:</span>
+									<span class="token-amount">{mockTokenBalances[currentPairIndex].totalPositions}</span>
+								</div>
+							</div>
+						</div>
+					{:else if accountsInitialized[currentPairIndex]}
+						<div class="balance-row loading">
+							<div class="pair-info">
+								<span class="pair-name">{selectedTab}/USDT</span>
+								<span class="pair-status">LOADING...</span>
+							</div>
+						</div>
+					{:else}
+						<div class="balance-row not-initialized">
+							<div class="pair-info">
+								<span class="pair-name">{selectedTab}/USDT</span>
+								<span class="pair-status">NOT INITIALIZED</span>
+							</div>
+							<div class="initialize-hint">
+								<span class="hint-text">Click "INITIALIZE" button above to set up trading account</span>
+							</div>
+						</div>
+					{/if}
 				</div>
-				{#each leaderboardData as leader}
-					<div class="leader-row" class:highlight={leader.address === 'YOU (Paper)'}>
-						<span class="rank">{leader.rank}</span>
-						<span class="address">{leader.address}</span>
-						<span class={leader.pnl >= 0 ? 'pnl-up' : 'pnl-down'}>
-							{leader.pnl >= 0 ? '+' : ''}${leader.pnl.toFixed(2)}
+			{:else}
+				<div class="no-wallet">
+					<div class="no-wallet-message">Connect wallet to view mock token balances</div>
+				</div>
+			{/if}
+			
+			<div class="leaderboard-section">
+				<div class="panel-subheader">
+					COMPETITION LEADERBOARD
+					<span class="leaderboard-stats">
+						<span>WIN RATE: {totalTrades > 0 ? ((winningTrades / totalTrades) * 100).toFixed(1) : 0}%</span>
+						<span class={totalPnL >= 0 ? 'pnl-up' : 'pnl-down'}>
+							YOUR P&L: ${totalPnL.toFixed(2)}
 						</span>
-						<span>{leader.trades}</span>
+					</span>
+				</div>
+				<div class="leaderboard-table">
+					<div class="table-header">
+						<span>RANK</span>
+						<span>TRADER</span>
+						<span>P&L</span>
+						<span>TRADES</span>
 					</div>
-				{/each}
+					{#each leaderboardData as leader}
+						<div class="leader-row" class:highlight={leader.address === 'YOU (Paper)'}>
+							<span class="rank">{leader.rank}</span>
+							<span class="address">{leader.address}</span>
+							<span class={leader.pnl >= 0 ? 'pnl-up' : 'pnl-down'}>
+								{leader.pnl >= 0 ? '+' : ''}${leader.pnl.toFixed(2)}
+							</span>
+							<span>{leader.trades}</span>
+						</div>
+					{/each}
+				</div>
 			</div>
 		</div>
 	</div>
@@ -696,8 +779,11 @@
 		padding: 8px 15px;
 		display: flex;
 		align-items: center;
-		gap: 15px;
+		gap: 10px;
 		border-bottom: 1px solid #333;
+		flex-wrap: nowrap;
+		overflow-x: auto;
+		min-height: 50px;
 	}
 
 	.logo {
@@ -764,12 +850,14 @@
 	.pyth-status {
 		display: flex;
 		align-items: center;
-		gap: 8px;
+		gap: 6px;
 		color: #ff9500;
-		font-size: 11px;
-		padding: 4px 12px;
+		font-size: 10px;
+		padding: 4px 8px;
 		background: #000;
 		border: 1px solid #333;
+		flex-shrink: 0;
+		min-width: 120px;
 	}
 
 	.status-label {
@@ -791,12 +879,14 @@
 	.magicblock-status {
 		display: flex;
 		align-items: center;
-		gap: 8px;
+		gap: 6px;
 		color: #ff9500;
-		font-size: 11px;
-		padding: 4px 12px;
+		font-size: 10px;
+		padding: 4px 8px;
 		background: #000;
 		border: 1px solid #333;
+		flex-shrink: 0;
+		min-width: 150px;
 	}
 
 	.wallet-addr {
@@ -853,12 +943,14 @@
 	.competition-timer {
 		display: flex;
 		align-items: center;
-		gap: 8px;
+		gap: 6px;
 		color: #ff9500;
-		font-size: 12px;
-		padding: 4px 12px;
+		font-size: 11px;
+		padding: 4px 8px;
 		background: #000;
 		border: 1px solid #333;
+		flex-shrink: 0;
+		min-width: 100px;
 	}
 
 	.timer-label {
@@ -880,9 +972,10 @@
 
 	.clock {
 		color: #ff9500;
-		font-size: 13px;
-		min-width: 100px;
+		font-size: 12px;
+		min-width: 80px;
 		text-align: right;
+		flex-shrink: 0;
 	}
 
 	.ticker-bar {
@@ -969,11 +1062,12 @@
 
 	.main-grid {
 		display: grid;
-		grid-template-columns: 350px 1fr 300px;
+		grid-template-columns: 320px 1fr 280px;
 		gap: 2px;
 		background: #111;
 		flex: 1;
 		overflow: hidden;
+		min-height: 0;
 	}
 
 	.panel {
@@ -993,11 +1087,14 @@
 		border-bottom: 1px solid #333;
 		display: flex;
 		align-items: center;
+		justify-content: space-between;
 	}
 
 	.news-list {
 		overflow-y: auto;
 		padding: 10px;
+		flex: 1;
+		max-height: calc(100vh - 200px);
 	}
 
 	.loading-state,
@@ -1044,6 +1141,49 @@
 		color: #fff;
 		font-size: 12px;
 		line-height: 1.5;
+	}
+
+	.news-toggle {
+		color: #00ff00;
+		cursor: pointer;
+		font-size: 9px;
+		font-weight: bold;
+		transition: all 0.2s ease;
+		padding: 2px 6px;
+		border: 1px solid #00ff00;
+		background: rgba(0, 255, 0, 0.1);
+	}
+
+	.news-toggle:hover {
+		background: #00ff00;
+		color: #000;
+		transform: scale(1.05);
+	}
+
+	.news-more {
+		text-align: center;
+		padding: 15px;
+		border-top: 1px solid #333;
+		margin-top: 10px;
+	}
+
+	.show-more-btn {
+		background: #1a1a1a;
+		color: #ff9500;
+		border: 1px solid #ff9500;
+		padding: 8px 16px;
+		font-family: 'Courier New', monospace;
+		font-size: 11px;
+		font-weight: bold;
+		cursor: pointer;
+		transition: all 0.2s ease;
+		letter-spacing: 0.5px;
+	}
+
+	.show-more-btn:hover {
+		background: #ff9500;
+		color: #000;
+		transform: scale(1.05);
 	}
 
 	.chart-container {
@@ -1360,5 +1500,163 @@
 
 	::-webkit-scrollbar-thumb:hover {
 		background: #ff9500;
+	}
+
+	/* Mock Token Balance Styles */
+	.balance-refresh {
+		color: #00ff00;
+		cursor: pointer;
+		font-size: 10px;
+		font-weight: bold;
+		transition: all 0.2s ease;
+		padding: 2px 8px;
+		border: 1px solid #00ff00;
+		background: rgba(0, 255, 0, 0.1);
+	}
+
+	.balance-refresh:hover {
+		background: #00ff00;
+		color: #000;
+		transform: scale(1.05);
+	}
+
+	.token-balances {
+		padding: 10px;
+		max-height: 200px;
+		overflow-y: auto;
+		flex-shrink: 0;
+	}
+
+	.balance-row {
+		display: flex;
+		flex-direction: column;
+		padding: 8px;
+		margin-bottom: 8px;
+		border: 1px solid #333;
+		background: #0a0a0a;
+		transition: all 0.2s ease;
+	}
+
+	.balance-row:hover {
+		border-color: #ff9500;
+		background: #1a1a1a;
+	}
+
+	.balance-row.loading {
+		opacity: 0.6;
+		border-color: #666;
+	}
+
+	.balance-row.not-initialized {
+		opacity: 0.4;
+		border-color: #444;
+	}
+
+	.pair-info {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		margin-bottom: 6px;
+	}
+
+	.pair-name {
+		color: #ff9500;
+		font-weight: bold;
+		font-size: 12px;
+		letter-spacing: 1px;
+	}
+
+	.pair-status {
+		font-size: 9px;
+		padding: 2px 6px;
+		border-radius: 2px;
+		font-weight: bold;
+	}
+
+	.balance-row .pair-status {
+		background: #00cc00;
+		color: #000;
+	}
+
+	.balance-row.loading .pair-status {
+		background: #ff9500;
+		color: #000;
+	}
+
+	.balance-row.not-initialized .pair-status {
+		background: #666;
+		color: #fff;
+	}
+
+	.balance-amounts {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+
+	.token-balance {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		font-size: 11px;
+	}
+
+	.token-label {
+		color: #666;
+		font-weight: bold;
+		letter-spacing: 0.5px;
+	}
+
+	.token-amount {
+		color: #fff;
+		font-family: 'Courier New', monospace;
+		font-weight: bold;
+	}
+
+	.positions-count .token-amount {
+		color: #00ff00;
+	}
+
+	.no-wallet {
+		padding: 40px 20px;
+		text-align: center;
+	}
+
+	.no-wallet-message {
+		color: #666;
+		font-size: 12px;
+		font-style: italic;
+	}
+
+	.leaderboard-section {
+		border-top: 1px solid #333;
+		margin-top: 10px;
+	}
+
+	.panel-subheader {
+		background: #1a1a1a;
+		color: #ff9500;
+		padding: 6px 12px;
+		font-size: 10px;
+		font-weight: bold;
+		letter-spacing: 1px;
+		border-bottom: 1px solid #333;
+		display: flex;
+		align-items: center;
+	}
+
+	.initialize-hint {
+		margin-top: 8px;
+		padding: 8px;
+		background: rgba(255, 149, 0, 0.1);
+		border: 1px solid #ff9500;
+		border-radius: 4px;
+	}
+
+	.hint-text {
+		color: #ff9500;
+		font-size: 10px;
+		font-style: italic;
+		line-height: 1.4;
 	}
 </style>
