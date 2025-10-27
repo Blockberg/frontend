@@ -53,7 +53,6 @@ export class MagicBlockClient {
 	// Set connected wallet adapter
 	async setConnectedWallet(wallet: Adapter | null) {
 		this.connectedWallet = wallet;
-		console.log('[MAGICBLOCK] Connected wallet set:', wallet?.name || 'None');
 
 		if (wallet?.connected && wallet.publicKey) {
 			await this.initializeEntity();
@@ -122,7 +121,6 @@ export class MagicBlockClient {
 			const accountInfo = await this.connection.getAccountInfo(userAccountPDA);
 			return accountInfo !== null;
 		} catch (error) {
-			console.error('[MAGICBLOCK] Failed to check account initialization:', error);
 			return false;
 		}
 	}
@@ -160,7 +158,6 @@ export class MagicBlockClient {
 			const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(methodName));
 			const discriminator = new Uint8Array(hash).slice(0, 8);
 			
-			console.log('[MAGICBLOCK] Calculated discriminator:', Array.from(discriminator));
 			
 			// Create instruction data buffer
 			const instructionData = Buffer.alloc(25);
@@ -188,7 +185,6 @@ export class MagicBlockClient {
 			transaction.recentBlockhash = latestBlockhash.blockhash;
 			transaction.feePayer = currentWallet.publicKey;
 
-			console.log('[MAGICBLOCK] Transaction details:', {
 				userAccount: userAccountPDA.toBase58(),
 				treasury: treasuryPubkey.toBase58(),
 				pairIndex,
@@ -207,7 +203,6 @@ export class MagicBlockClient {
 					});
 				} catch (error: any) {
 					if (error.name === 'SendTransactionError') {
-						console.error('[MAGICBLOCK] SendTransactionError details:', error.getLogs?.() || 'No logs available');
 						if (error.message?.includes('This transaction has already been processed')) {
 							throw new Error('Transaction already processed. Please wait a moment before trying again.');
 						}
@@ -218,14 +213,12 @@ export class MagicBlockClient {
 				throw new Error('Wallet does not support transaction signing');
 			}
 
-			console.log('[MAGICBLOCK] Account initialized on main chain:', signature);
 			
 			// Wait for confirmation
 			await this.connection.confirmTransaction(signature, 'confirmed');
 			
 			return signature;
 		} catch (error) {
-			console.error('[MAGICBLOCK] Failed to initialize account:', error);
 			throw error;
 		}
 	}
@@ -248,19 +241,16 @@ export class MagicBlockClient {
 	}
 
 	async initializeSessionWallet(): Promise<Keypair> {
-		console.log('[MAGICBLOCK] Initializing session wallet...');
 
 		const stored = localStorage.getItem('magicblock_session_wallet');
 		if (stored) {
 			try {
 				const secretKey = Uint8Array.from(JSON.parse(stored));
 				this.sessionWallet = Keypair.fromSecretKey(secretKey);
-				console.log('[MAGICBLOCK] Loaded session wallet:', this.sessionWallet.publicKey.toBase58());
 				await this.initializeEntity();
 				this.setupProvider();
 				return this.sessionWallet;
 			} catch (e) {
-				console.log('[MAGICBLOCK] Failed to load stored wallet, creating new one');
 			}
 		}
 
@@ -269,7 +259,6 @@ export class MagicBlockClient {
 			'magicblock_session_wallet',
 			JSON.stringify(Array.from(this.sessionWallet.secretKey))
 		);
-		console.log('[MAGICBLOCK] Created new session wallet:', this.sessionWallet.publicKey.toBase58());
 
 		await this.initializeEntity();
 		this.setupProvider();
@@ -285,12 +274,9 @@ export class MagicBlockClient {
 				worldId: WORLD_ID,
 				seed: Buffer.from(currentWallet.publicKey.toBytes()),
 			});
-			console.log('[MAGICBLOCK] Entity PDA:', this.entityPda.toBase58());
 
 			this.competitionEntity = new PublicKey('5ebXENtrEamPapRhzMGjvrcavWwrEwWiY4Yftjx3wUsk');
-			console.log('[MAGICBLOCK] Competition entity:', this.competitionEntity.toBase58());
 		} catch (e) {
-			console.error('[MAGICBLOCK] Failed to initialize entity:', e);
 		}
 	}
 
@@ -300,9 +286,7 @@ export class MagicBlockClient {
 				Uint8Array.from(Buffer.from(secretKeyBase58, 'base64'))
 			);
 			this.wallet = secretKey;
-			console.log('[MAGICBLOCK] Admin wallet set:', this.wallet.publicKey.toBase58());
 		} catch (e) {
-			console.error('[MAGICBLOCK] Failed to set admin wallet:', e);
 		}
 	}
 
@@ -330,7 +314,6 @@ export class MagicBlockClient {
 	setupProvider(): void {
 		const provider = this.getProvider();
 		anchor.setProvider(provider);
-		console.log('[MAGICBLOCK] Global provider set for Bolt SDK');
 	}
 
 	async getTradingAccountPDA(owner: PublicKey): Promise<[PublicKey, number]> {
@@ -461,7 +444,6 @@ export class MagicBlockClient {
 			throw new Error('Wallet not connected');
 		}
 
-		console.log('[MAGICBLOCK] Opening position:', {
 			pair: pairSymbol,
 			direction,
 			price: currentPrice,
@@ -485,7 +467,6 @@ export class MagicBlockClient {
 				stopLoss
 			);
 		} catch (error) {
-			console.warn('[MAGICBLOCK] MagicBlock rollup failed, falling back to direct contract:', error);
 			
 			// Fallback to direct contract call
 			return await this.openDirectPosition(
@@ -509,7 +490,6 @@ export class MagicBlockClient {
 		takeProfit?: number,
 		stopLoss?: number
 	): Promise<string> {
-		console.log('[MAGICBLOCK] Opening MagicBlock position via direct paper trading program...');
 		
 		// Instead of using Bolt systems, let's execute the paper trading program directly
 		// through the MagicBlock rollup, using the same logic as the direct contract
@@ -528,7 +508,6 @@ export class MagicBlockClient {
 
 		const requiredBalance = requiredTokenIn / 1e6; // Convert back to readable format for comparison
 		const epsilon = 0.01; // Allow 0.01 USDT tolerance for floating point precision
-		console.log('[MAGICBLOCK] Balance check:', {
 			available: accountData.tokenInBalance,
 			required: requiredBalance,
 			difference: accountData.tokenInBalance - requiredBalance,
@@ -540,7 +519,6 @@ export class MagicBlockClient {
 			throw new Error(`Insufficient balance. Required: ${requiredBalance.toFixed(2)} USDT, Available: ${accountData.tokenInBalance.toFixed(2)} USDT`);
 		}
 
-		console.log('[MAGICBLOCK] Trading params:', {
 			direction,
 			pairIndex,
 			priceScaled,
@@ -614,7 +592,6 @@ export class MagicBlockClient {
 		transaction.recentBlockhash = latestBlockhash.blockhash;
 		transaction.feePayer = currentWallet.publicKey;
 
-		console.log('[MAGICBLOCK] Signing paper trading transaction on MagicBlock rollup...');
 		const signedTx = await currentWallet.signTransaction(transaction);
 		
 		let signature: string;
@@ -625,26 +602,21 @@ export class MagicBlockClient {
 			});
 		} catch (error: any) {
 			if (error.name === 'SendTransactionError') {
-				console.error('[MAGICBLOCK] SendTransactionError details:', error.getLogs?.() || 'No logs available');
 				if (error.message?.includes('This transaction has already been processed')) {
 					// Check if we can extract the signature from the error or transaction
 					// If the transaction was already processed, it likely succeeded
-					console.log('[MAGICBLOCK] Transaction may have already succeeded, checking...');
 					
 					// Try to get the signature from the serialized transaction
 					try {
 						const txSignature = signedTx.signatures[0]?.toString();
 						if (txSignature) {
-							console.log('[MAGICBLOCK] Found transaction signature:', txSignature);
 							// Check transaction status
 							const status = await this.connection.getSignatureStatus(txSignature);
 							if (status.value?.confirmationStatus) {
-								console.log('[MAGICBLOCK] Transaction already confirmed:', txSignature);
 								return txSignature;
 							}
 						}
 					} catch (sigError) {
-						console.warn('[MAGICBLOCK] Could not check transaction status:', sigError);
 					}
 					
 					throw new Error('Transaction already processed. Please wait a moment before trying again.');
@@ -660,7 +632,6 @@ export class MagicBlockClient {
 			lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
 		}, 'confirmed');
 
-		console.log('[MAGICBLOCK] MagicBlock rollup position opened:', signature);
 		return signature;
 	}
 
@@ -697,7 +668,6 @@ export class MagicBlockClient {
 		}
 
 		const requiredBalance = requiredTokenIn / 1e6; // Convert back to readable format
-		console.log('[MAGICBLOCK] Direct contract balance check:', {
 			available: accountData.tokenInBalance,
 			required: requiredBalance,
 			size,
@@ -763,7 +733,6 @@ export class MagicBlockClient {
 		transaction.recentBlockhash = latestBlockhash.blockhash;
 		transaction.feePayer = currentWallet.publicKey;
 
-		console.log('[MAGICBLOCK] Signing direct contract transaction...');
 		const signedTx = await currentWallet.signTransaction(transaction);
 		
 		let signature: string;
@@ -774,23 +743,18 @@ export class MagicBlockClient {
 			});
 		} catch (error: any) {
 			if (error.name === 'SendTransactionError') {
-				console.error('[MAGICBLOCK] SendTransactionError details:', error.getLogs?.() || 'No logs available');
 				if (error.message?.includes('This transaction has already been processed')) {
 					// Check if the transaction actually succeeded
-					console.log('[MAGICBLOCK] Transaction may have already succeeded, checking...');
 					
 					try {
 						const txSignature = signedTx.signatures[0]?.toString();
 						if (txSignature) {
-							console.log('[MAGICBLOCK] Found transaction signature:', txSignature);
 							const status = await this.connection.getSignatureStatus(txSignature);
 							if (status.value?.confirmationStatus) {
-								console.log('[MAGICBLOCK] Transaction already confirmed:', txSignature);
 								return txSignature;
 							}
 						}
 					} catch (sigError) {
-						console.warn('[MAGICBLOCK] Could not check transaction status:', sigError);
 					}
 					
 					throw new Error('Transaction already processed. Please wait a moment before trying again.');
@@ -806,7 +770,6 @@ export class MagicBlockClient {
 			lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
 		}, 'confirmed');
 
-		console.log('[MAGICBLOCK] Direct contract position opened:', signature);
 		return signature;
 	}
 
@@ -816,7 +779,6 @@ export class MagicBlockClient {
 			throw new Error('Wallet not connected');
 		}
 
-		console.log('[MAGICBLOCK] Closing direct contract position:', positionPubkey);
 
 		// Use MagicBlock connection only to avoid rate limits
 		
@@ -863,7 +825,6 @@ export class MagicBlockClient {
 		transaction.recentBlockhash = latestBlockhash.blockhash;
 		transaction.feePayer = currentWallet.publicKey;
 
-		console.log('[MAGICBLOCK] Signing close position transaction...');
 		const signedTx = await currentWallet.signTransaction!(transaction);
 		
 		let signature: string;
@@ -874,23 +835,18 @@ export class MagicBlockClient {
 			});
 		} catch (error: any) {
 			if (error.name === 'SendTransactionError') {
-				console.error('[MAGICBLOCK] SendTransactionError details:', error.getLogs?.() || 'No logs available');
 				if (error.message?.includes('This transaction has already been processed')) {
 					// For close position, this usually means the position was successfully closed
-					console.log('[MAGICBLOCK] Close position already processed - treating as success');
 					
 					try {
 						const txSignature = signedTx.signatures[0]?.toString();
 						if (txSignature) {
-							console.log('[MAGICBLOCK] Returning close position signature:', txSignature);
 							return txSignature;
 						}
 					} catch (sigError) {
-						console.warn('[MAGICBLOCK] Could not extract signature:', sigError);
 					}
 					
 					// Return success indicator - position likely closed successfully  
-					console.log('[MAGICBLOCK] Position close completed (already processed)');
 					return 'close_position_success';
 				}
 			}
@@ -904,7 +860,6 @@ export class MagicBlockClient {
 			lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
 		}, 'confirmed');
 
-		console.log('[MAGICBLOCK] Position closed:', signature);
 		return signature;
 	}
 
@@ -919,7 +874,6 @@ export class MagicBlockClient {
 			throw new Error('Wallet not connected');
 		}
 
-		console.log('[MAGICBLOCK] Executing spot trade:', {
 			pair: pairSymbol,
 			action,
 			price: currentPrice,
@@ -953,12 +907,10 @@ export class MagicBlockClient {
 		if (action === 'BUY') {
 			const requiredUSDT = sizeInUSDT;
 			const availableUSDT = accountData.tokenInBalance;
-			console.log(`[MAGICBLOCK] BUY check - Required USDT: ${requiredUSDT}, Available: ${availableUSDT}`);
 			if (availableUSDT < requiredUSDT) {
 				throw new Error(`Insufficient USDT balance. Required: ${requiredUSDT}, Available: ${availableUSDT.toFixed(2)}`);
 			}
 		} else {
-			console.log(`[MAGICBLOCK] SELL check - Required tokens: ${requiredTokenAmount}, Available: ${availableTokenAmount}`);
 			if (availableTokenAmount < requiredTokenAmount) {
 				throw new Error(`Insufficient token balance. Required: ${requiredTokenAmount.toFixed(6)}, Available: ${availableTokenAmount.toFixed(6)}`);
 			}
@@ -997,7 +949,6 @@ export class MagicBlockClient {
 		transaction.recentBlockhash = latestBlockhash.blockhash;
 		transaction.feePayer = currentWallet.publicKey;
 
-		console.log('[MAGICBLOCK] Signing spot trade transaction...');
 		const signedTx = await currentWallet.signTransaction!(transaction);
 		
 		let signature: string;
@@ -1008,23 +959,18 @@ export class MagicBlockClient {
 			});
 		} catch (error: any) {
 			if (error.name === 'SendTransactionError') {
-				console.error('[MAGICBLOCK] SendTransactionError details:', error.getLogs?.() || 'No logs available');
 				if (error.message?.includes('This transaction has already been processed')) {
 					// For spot trades, this usually means the trade was successful
-					console.log('[MAGICBLOCK] Spot trade already processed - treating as success');
 					
 					try {
 						const txSignature = signedTx.signatures[0]?.toString();
 						if (txSignature) {
-							console.log('[MAGICBLOCK] Returning spot trade signature:', txSignature);
 							return txSignature;
 						}
 					} catch (sigError) {
-						console.warn('[MAGICBLOCK] Could not extract signature:', sigError);
 					}
 					
 					// Return success indicator - trade likely completed successfully  
-					console.log('[MAGICBLOCK] Spot trade completed (already processed)');
 					return 'spot_trade_success';
 				}
 			}
@@ -1038,7 +984,6 @@ export class MagicBlockClient {
 			lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
 		}, 'confirmed');
 
-		console.log('[MAGICBLOCK] Spot trade completed:', signature);
 		return signature;
 	}
 
@@ -1048,7 +993,6 @@ export class MagicBlockClient {
 			throw new Error('Wallet not connected or entity not initialized');
 		}
 
-		console.log('[MAGICBLOCK] Closing position:', positionId);
 
 		try {
 			const positionEntityPda = new PublicKey(positionId);
@@ -1081,7 +1025,6 @@ export class MagicBlockClient {
 			// Sign and send transaction
 			let signature: string;
 			if (currentWallet.signTransaction) {
-				console.log('[MAGICBLOCK] Signing close position transaction...');
 				const signedTx = await currentWallet.signTransaction(transaction);
 				try {
 					signature = await this.connection.sendRawTransaction(signedTx.serialize(), {
@@ -1090,7 +1033,6 @@ export class MagicBlockClient {
 					});
 				} catch (error: any) {
 					if (error.name === 'SendTransactionError') {
-						console.error('[MAGICBLOCK] SendTransactionError details:', error.getLogs?.() || 'No logs available');
 						if (error.message?.includes('This transaction has already been processed')) {
 							throw new Error('Transaction already processed. Please wait a moment before trying again.');
 						}
@@ -1116,10 +1058,8 @@ export class MagicBlockClient {
 				throw new Error('No signing method available');
 			}
 
-			console.log('[MAGICBLOCK] Position closed:', signature);
 			return signature;
 		} catch (error) {
-			console.error('[MAGICBLOCK] Failed to close position:', error);
 			throw error;
 		}
 	}
@@ -1269,31 +1209,15 @@ export class MagicBlockClient {
 	}
 
 	async requestAirdrop(amount: number = 1): Promise<string> {
-		if (!this.sessionWallet) {
-			throw new Error('Session wallet not initialized');
+		const currentWallet = this.getCurrentWallet();
+		if (!currentWallet) {
+			throw new Error('Wallet not connected');
 		}
 
-		console.log('[MAGICBLOCK] Requesting airdrop...');
 		const signature = await this.connection.requestAirdrop(
-			this.sessionWallet.publicKey,
+			currentWallet.publicKey,
 			amount * LAMPORTS_PER_SOL
 		);
-
-		// Don't wait for confirmation, just return signature
-		// Confirmation can take a long time on devnet
-		console.log('[MAGICBLOCK] Airdrop requested:', signature);
-
-		// Poll for balance update in background
-		setTimeout(async () => {
-			for (let i = 0; i < 10; i++) {
-				await new Promise(resolve => setTimeout(resolve, 3000)); // Wait 3 seconds
-				const balance = await this.connection.getBalance(this.sessionWallet!.publicKey);
-				if (balance > 0) {
-					console.log('[MAGICBLOCK] Airdrop confirmed! Balance:', balance / LAMPORTS_PER_SOL);
-					break;
-				}
-			}
-		}, 0);
 
 		return signature;
 	}
@@ -1356,7 +1280,6 @@ export class MagicBlockClient {
 				totalPositions
 			};
 		} catch (error) {
-			console.error('[MAGICBLOCK] Failed to get user account data:', error);
 			return null;
 		}
 	}
@@ -1382,7 +1305,6 @@ export class MagicBlockClient {
 			throw new Error('Wallet not connected or entity not initialized');
 		}
 
-		console.log('[MAGICBLOCK] Joining competition via Bolt system...');
 
 		try {
 			const { transaction } = await ApplySystem({
@@ -1409,7 +1331,6 @@ export class MagicBlockClient {
 			// Sign and send transaction
 			let signature: string;
 			if (currentWallet.signTransaction) {
-				console.log('[MAGICBLOCK] Signing join competition transaction...');
 				const signedTx = await currentWallet.signTransaction(transaction);
 				try {
 					signature = await this.connection.sendRawTransaction(signedTx.serialize(), {
@@ -1418,7 +1339,6 @@ export class MagicBlockClient {
 					});
 				} catch (error: any) {
 					if (error.name === 'SendTransactionError') {
-						console.error('[MAGICBLOCK] SendTransactionError details:', error.getLogs?.() || 'No logs available');
 						if (error.message?.includes('This transaction has already been processed')) {
 							throw new Error('Transaction already processed. Please wait a moment before trying again.');
 						}
@@ -1444,10 +1364,8 @@ export class MagicBlockClient {
 				throw new Error('No signing method available');
 			}
 
-			console.log('[MAGICBLOCK] Competition joined:', signature);
 			return signature;
 		} catch (error) {
-			console.error('[MAGICBLOCK] Failed to join competition:', error);
 			throw error;
 		}
 	}
@@ -1458,7 +1376,6 @@ export class MagicBlockClient {
 		}
 
 		try {
-			console.log('[MAGICBLOCK] Fetching leaderboard from competition components...');
 			
 			const tradingAccountAccounts = await this.connection.getProgramAccounts(COMPONENT_IDS.TRADING_ACCOUNT, {
 				filters: [
@@ -1486,7 +1403,6 @@ export class MagicBlockClient {
 						balance: 10000, // Parse from actual data structure
 					});
 				} catch (parseError) {
-					console.warn('[MAGICBLOCK] Failed to parse trading account:', parseError);
 				}
 			}
 
@@ -1499,7 +1415,6 @@ export class MagicBlockClient {
 				rank: index + 1
 			}));
 		} catch (error) {
-			console.warn('[MAGICBLOCK] Failed to fetch leaderboard:', error);
 			return [];
 		}
 	}
@@ -1510,7 +1425,6 @@ export class MagicBlockClient {
 		}
 
 		try {
-			console.log('[MAGICBLOCK] Fetching competition data...');
 
 			const [componentPda] = PublicKey.findProgramAddressSync(
 				[Buffer.from('component'), this.competitionEntity.toBuffer(), COMPONENT_IDS.COMPETITION.toBuffer()],
@@ -1519,7 +1433,6 @@ export class MagicBlockClient {
 
 			const accountInfo = await this.connection.getAccountInfo(componentPda);
 			if (!accountInfo) {
-				console.warn('[MAGICBLOCK] Competition component not found');
 				return null;
 			}
 
@@ -1561,7 +1474,6 @@ export class MagicBlockClient {
 				name
 			};
 		} catch (error) {
-			console.error('[MAGICBLOCK] Failed to fetch competition data:', error);
 			return null;
 		}
 	}
@@ -1572,7 +1484,6 @@ export class MagicBlockClient {
 			throw new Error('Wallet not connected or competition entity not initialized');
 		}
 
-		console.log('[MAGICBLOCK] Settling competition via Bolt system...');
 
 		try {
 			const { transaction } = await ApplySystem({
@@ -1595,7 +1506,6 @@ export class MagicBlockClient {
 			// Sign and send transaction
 			let signature: string;
 			if (currentWallet.signTransaction) {
-				console.log('[MAGICBLOCK] Signing settle competition transaction...');
 				const signedTx = await currentWallet.signTransaction(transaction);
 				try {
 					signature = await this.connection.sendRawTransaction(signedTx.serialize(), {
@@ -1604,7 +1514,6 @@ export class MagicBlockClient {
 					});
 				} catch (error: any) {
 					if (error.name === 'SendTransactionError') {
-						console.error('[MAGICBLOCK] SendTransactionError details:', error.getLogs?.() || 'No logs available');
 						if (error.message?.includes('This transaction has already been processed')) {
 							throw new Error('Transaction already processed. Please wait a moment before trying again.');
 						}
@@ -1630,10 +1539,8 @@ export class MagicBlockClient {
 				throw new Error('No signing method available');
 			}
 
-			console.log('[MAGICBLOCK] Competition settled:', signature);
 			return signature;
 		} catch (error) {
-			console.error('[MAGICBLOCK] Failed to settle competition:', error);
 			throw error;
 		}
 	}
@@ -1649,7 +1556,6 @@ export class MagicBlockClient {
 			throw new Error('Admin wallet not initialized');
 		}
 
-		console.log('[MAGICBLOCK] Minting trophy NFT for rank', rank);
 
 		const mintKeypair = Keypair.generate();
 
@@ -1694,11 +1600,8 @@ export class MagicBlockClient {
 				{ commitment: 'confirmed' }
 			);
 
-			console.log('[MAGICBLOCK] Trophy NFT minted:', signature);
-			console.log('[MAGICBLOCK] Mint address:', mintKeypair.publicKey.toBase58());
 			return signature;
 		} catch (error) {
-			console.error('[MAGICBLOCK] Failed to mint trophy NFT:', error);
 			throw error;
 		}
 	}

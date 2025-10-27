@@ -106,7 +106,6 @@
 			
 			// Fetch mock token balances for all initialized accounts
 			mockTokenBalances = await magicBlockClient.getAllUserAccountData();
-			console.log('[WALLET] Mock token balances:', mockTokenBalances);
 			
 			// Fetch on-chain positions
 			await fetchOnChainPositions();
@@ -123,7 +122,6 @@
 				magicBlockStatus = `Connected - ${initializedPairs}/${totalPairs} pairs initialized`;
 			}
 		} catch (error) {
-			console.error('[WALLET] Failed to update wallet status:', error);
 			magicBlockStatus = 'Connected - Status check failed';
 		}
 	}
@@ -140,9 +138,7 @@
 			// Initialize accounts for all pairs that aren't already initialized
 			for (const [pairName, pairIndex] of Object.entries(TRADING_PAIRS)) {
 				if (!accountsInitialized[pairIndex]) {
-					console.log(`[MAGICBLOCK] Initializing account for ${pairName} (index: ${pairIndex})`);
 					const signature = await magicBlockClient.initializeAccount(pairIndex);
-					console.log(`[MAGICBLOCK] ${pairName} account initialized:`, signature);
 				}
 			}
 
@@ -154,7 +150,6 @@
 				await updateWalletStatus();
 			}, 3000); // Wait 3 seconds for accounts to be fully initialized
 		} catch (error: any) {
-			console.error('[MAGICBLOCK] Failed to initialize accounts:', error);
 			magicBlockStatus = `Initialization failed: ${error.message}`;
 		}
 	}
@@ -176,7 +171,6 @@
 	async function fetchNews() {
 		newsLoading = true;
 		try {
-			console.log('[NEWS API] Fetching latest crypto news from CryptoCompare...');
 			const response = await fetch('https://min-api.cryptocompare.com/data/v2/news/?lang=EN&categories=BTC,ETH,SOL');
 
 			if (!response.ok) {
@@ -187,12 +181,9 @@
 
 			if (data.Data && data.Data.length > 0) {
 				news = data.Data.slice(0, 30);
-				console.log(`[NEWS API] SUCCESS: Loaded ${news.length} articles`);
 			} else {
-				console.warn('[NEWS API] No news data received');
 			}
 		} catch (error) {
-			console.error('[NEWS API] ERROR: Failed to fetch news:', error);
 			news = [];
 		} finally {
 			newsLoading = false;
@@ -202,17 +193,13 @@
 	async function fetchPythPrices() {
 		try {
 			const startTime = Date.now();
-			console.log('[PYTH] Fetching latest prices using official Hermes client...');
 
 			const priceIds = Object.values(PYTH_FEEDS).map(f => f.id);
-			console.log('[PYTH] Requesting', priceIds.length, 'price feeds...');
 
 			const priceUpdates = await hermesClient.getLatestPriceUpdates(priceIds);
 
-			console.log('[PYTH] Response received in', Date.now() - startTime, 'ms');
 
 			if (priceUpdates?.parsed) {
-				console.log('[PYTH] Parsing', priceUpdates.parsed.length, 'price feeds...');
 
 				for (const priceData of priceUpdates.parsed) {
 					const symbol = Object.keys(PYTH_FEEDS).find(
@@ -241,26 +228,21 @@
 
 						previousPrices[symbol] = price;
 
-						console.log(`[PYTH] ${symbol}: $${price.toFixed(2)} (±$${confidence.toFixed(4)})`);
 					}
 				}
 
 				prices = prices;
 				pythStatus = `Updated ${Object.keys(prices).length} assets`;
 				pythLastUpdate = Date.now();
-				console.log('[PYTH] SUCCESS: Updated all prices via Hermes client');
 			} else {
 				pythStatus = 'No parsed data';
-				console.warn('[PYTH] No parsed data in Hermes response');
 			}
 		} catch (error: any) {
 			pythStatus = `Error: ${error.message}`;
-			console.error('[PYTH] ERROR: Failed to fetch prices:', error);
 		}
 	}
 
 	function startPythPriceUpdates() {
-		console.log('[PYTH] Starting real-time price updates (2-second interval)...');
 		fetchPythPrices(); // Initial fetch
 		pythUpdateInterval = setInterval(fetchPythPrices, 2000); // Update every 2 seconds
 	}
@@ -276,24 +258,16 @@
 	}
 
 	async function switchTab(newTab: string) {
-		console.log('[TAB] Switching from', selectedTab, 'to', newTab);
 		selectedTab = newTab;
 		
 		// Refresh account data for the new pair
 		if (connectedWallet?.connected) {
-			console.log('[TAB] Refreshing account data for pair:', newTab);
 			await updateWalletStatus();
 			await fetchOnChainPositions();
 		}
 	}
 
 	async function executeSpotTrade(action: 'BUY' | 'SELL') {
-		console.log('[TRADING] executeSpotTrade called with action:', action);
-		console.log('[TRADING] Wallet connected:', connectedWallet?.connected);
-		console.log('[TRADING] isOnChainMode:', isOnChainMode);
-		console.log('[TRADING] positionSize:', positionSize);
-		console.log('[TRADING] selectedTab:', selectedTab);
-		console.log('[TRADING] prices:', prices);
 
 		if (!connectedWallet?.connected) {
 			alert('Please connect your wallet to trade');
@@ -303,8 +277,6 @@
 		const currentPrice = prices[selectedTab].price;
 		const size = parseFloat(positionSize);
 
-		console.log('[TRADING] Current price:', currentPrice);
-		console.log('[TRADING] Parsed size:', size);
 
 		if (size <= 0) {
 			alert('Please enter a valid position size');
@@ -322,7 +294,6 @@
 					size
 				);
 
-				console.log(`[TRADING] ${action} trade executed on-chain:`, txSig);
 				magicBlockStatus = `${action} trade completed: ${txSig.substring(0, 8)}...`;
 				
 				// Refresh balances after successful trade
@@ -330,7 +301,6 @@
 					await updateWalletStatus();
 				}, 2000);
 			} catch (error: any) {
-				console.error(`[TRADING] Failed to execute ${action} trade:`, error);
 				magicBlockStatus = `Error - check console`;
 				return;
 			}
@@ -369,7 +339,6 @@
 					sl
 				);
 
-				console.log('[TRADING] Position opened on-chain:', txSig);
 				
 				// Check if it's a MagicBlock or direct contract transaction
 				if (txSig.length > 50) {
@@ -383,7 +352,6 @@
 					await updateWalletStatus();
 				}, 2000);
 			} catch (error: any) {
-				console.error('[TRADING] Failed to open position:', error);
 				magicBlockStatus = `Failed to open position: ${error.message || 'Transaction failed'}`;
 				return;
 			}
@@ -420,11 +388,9 @@
 					// This is a direct contract position - use closeDirectPosition
 					const currentPrice = prices[onChainPos.pairSymbol]?.price || onChainPos.entryPrice;
 					txSig = await magicBlockClient.closeDirectPosition(id.toString(), currentPrice);
-					console.log('[TRADING] Direct contract position closed:', txSig);
 				} else {
 					// This is a traditional MagicBlock/Bolt position
 					txSig = await magicBlockClient.closePosition(id.toString());
-					console.log('[TRADING] MagicBlock position closed:', txSig);
 				}
 				
 				magicBlockStatus = `Position closed: ${txSig.substring(0, 8)}...`;
@@ -436,12 +402,10 @@
 				}, 1000);
 				
 			} catch (error: any) {
-				console.error('[TRADING] Close position error:', error);
 				
 				// Check if it's the "already processed" error which often means success
 				if (error.message?.includes('This transaction has already been processed') || 
 					error.message?.includes('Transaction already processed')) {
-					console.log('[TRADING] Transaction may have succeeded despite error');
 					magicBlockStatus = 'Position closed (already processed)';
 					
 					// Refresh positions immediately since it likely succeeded
@@ -470,7 +434,6 @@
 
 		// Real leaderboard updates would be handled by the competition contract
 
-		console.log(`Closed ${position.direction} ${position.symbol} - P&L: $${pnl.toFixed(2)}`);
 		activePositions = activePositions.filter(p => p.id !== id);
 	}
 
@@ -488,7 +451,6 @@
 				1000000000 // 1 SOL
 			);
 			magicBlockStatus = `Airdrop sent: ${signature.substring(0, 8)}...`;
-			console.log('[AIRDROP] Sent:', signature);
 
 			// Poll balance every 2 seconds to update UI
 			const pollInterval = setInterval(async () => {
@@ -502,7 +464,6 @@
 			// Stop polling after 60 seconds
 			setTimeout(() => clearInterval(pollInterval), 60000);
 		} catch (error: any) {
-			console.error('[AIRDROP] Failed:', error);
 			magicBlockStatus = `Airdrop failed: ${error.message || 'Request failed'}`;
 		}
 	}
@@ -538,8 +499,6 @@
 	}
 
 	onMount(() => {
-		console.log('[APP] Initializing Blockberg Terminal with Pyth Network + MagicBlock...');
-		console.log('[APP] Using official @pythnetwork/hermes-client package');
 
 		// Initialize session wallet as fallback but don't set as primary wallet
 		const initializeWallet = async () => {
@@ -553,7 +512,6 @@
 					magicBlockStatus = 'Ready - Connect wallet to trade';
 				}
 			} catch (error) {
-				console.error('[MAGICBLOCK] Failed to initialize:', error);
 				magicBlockStatus = 'Initialization failed';
 			}
 		};
@@ -580,7 +538,6 @@
 			}
 		}, 3000);
 
-		console.log('[APP] Blockberg Terminal ready');
 
 		return () => {
 			if (pythUpdateInterval) {
@@ -621,7 +578,7 @@
 				{#if walletBalance < 0.1}
 					<button class="airdrop-btn" on:click={requestAirdrop}>AIRDROP</button>
 				{/if}
-				{#if Object.values(accountsInitialized).some(initialized => !initialized)}
+				{#if Object.keys(accountsInitialized).length === 0 || Object.values(accountsInitialized).some(initialized => !initialized)}
 					<button class="initialize-btn" on:click={initializeAllAccounts}>INITIALIZE</button>
 				{/if}
 			{/if}
