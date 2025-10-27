@@ -6,7 +6,7 @@ export const MAGICBLOCK_RPC = 'https://rpc.magicblock.app/devnet/';
 export const SOLANA_RPC = 'https://api.devnet.solana.com';
 
 // Paper Trading Program ID from the contract
-export const PAPER_TRADING_PROGRAM_ID = new PublicKey('2zaegVL5odaCikNPEzCnaicgvu1n9ueHZoQrvEPWX161');
+export const PAPER_TRADING_PROGRAM_ID = new PublicKey('b6NjCktqaB4KqTvsNmYTJ9KBfwMJ7Sh4hMJ2Xz26YR3');
 
 export const COMPONENT_IDS = {
 	TRADING_ACCOUNT: new PublicKey('3PDo9AKeLhU6hcUC7gft3PKQuotH4624mcevqdSiyTPS'),
@@ -520,10 +520,9 @@ export class MagicBlockClient {
 		// Instead of using Bolt systems, let's execute the paper trading program directly
 		// through the MagicBlock rollup, using the same logic as the direct contract
 		
-		const priceScaled = Math.floor(currentPrice * 1e6); // 6 decimals for price
-		// Calculate required token_in balance: size * currentPrice (both in their respective scales)
-		const requiredTokenIn = Math.floor(size * currentPrice * 1e6); // This should match token_in_balance scale
-		const amountTokenOut = Math.floor(size * 1e9); // 9 decimals for token amount
+		const priceScaled = Math.floor(currentPrice * 1e6);
+		const amountTokenOut = Math.floor((size / currentPrice) * 1e9);
+		const requiredTokenIn = Math.floor(size * 1e6);
 		const takeProfitScaled = takeProfit ? Math.floor(takeProfit * 1e6) : 0;
 		const stopLossScaled = stopLoss ? Math.floor(stopLoss * 1e6) : 0;
 
@@ -579,7 +578,7 @@ export class MagicBlockClient {
 		// Create instruction data buffer (discriminator + 4 u64s)
 		const instructionData = Buffer.alloc(8 + 32); // 8 bytes discriminator + 32 bytes for 4 u64s
 		Buffer.from(discriminator).copy(instructionData, 0);
-		instructionData.writeBigUInt64LE(BigInt(requiredTokenIn), 8); // Use requiredTokenIn for the amount
+		instructionData.writeBigUInt64LE(BigInt(amountTokenOut), 8);
 		instructionData.writeBigUInt64LE(BigInt(priceScaled), 16);
 		instructionData.writeBigUInt64LE(BigInt(takeProfitScaled), 24);
 		instructionData.writeBigUInt64LE(BigInt(stopLossScaled), 32);
@@ -690,9 +689,9 @@ export class MagicBlockClient {
 			throw new Error(`Trading account not initialized for pair ${pairIndex}. Please initialize first.`);
 		}
 
-		const priceScaled = Math.floor(currentPrice * 1e6); // 6 decimals for price
-		const requiredTokenIn = Math.floor(size * currentPrice * 1e6); // Required balance for the position
-		const amountTokenOut = Math.floor(size * 1e9); // 9 decimals for token amount
+		const priceScaled = Math.floor(currentPrice * 1e6);
+		const amountTokenOut = Math.floor((size / currentPrice) * 1e9);
+		const requiredTokenIn = Math.floor(size * 1e6);
 		const takeProfitScaled = takeProfit ? Math.floor(takeProfit * 1e6) : 0;
 		const stopLossScaled = stopLoss ? Math.floor(stopLoss * 1e6) : 0;
 
@@ -729,7 +728,7 @@ export class MagicBlockClient {
 		// Create instruction data buffer (discriminator + 4 u64s)
 		const instructionData = Buffer.alloc(8 + 32); // 8 bytes discriminator + 32 bytes for 4 u64s
 		Buffer.from(discriminator).copy(instructionData, 0);
-		instructionData.writeBigUInt64LE(BigInt(requiredTokenIn), 8); // Use requiredTokenIn for the amount
+		instructionData.writeBigUInt64LE(BigInt(amountTokenOut), 8);
 		instructionData.writeBigUInt64LE(BigInt(priceScaled), 16);
 		instructionData.writeBigUInt64LE(BigInt(takeProfitScaled), 24);
 		instructionData.writeBigUInt64LE(BigInt(stopLossScaled), 32);
@@ -945,20 +944,8 @@ export class MagicBlockClient {
 			throw new Error(`Trading account not initialized for pair ${pairIndex}. Please initialize first.`);
 		}
 
-		// Calculate amount of tokens based on USDT size and current price
-		// For BUY: amountTokenOut = sizeInUSDT / currentPrice (how many tokens we get for that USDT amount)
-		// For SELL: amountTokenOut = sizeInUSDT (directly the token amount to sell)
-		let amountTokenOut: number;
-		if (action === 'BUY') {
-			// For buying: convert USDT size to token amount
-			amountTokenOut = Math.floor((sizeInUSDT / currentPrice) * 1e9); // 9 decimals for token amount
-		} else {
-			// For selling: sizeInUSDT is actually the token amount to sell
-			amountTokenOut = Math.floor(sizeInUSDT * 1e9); // 9 decimals for token amount
-		}
-
-		// Scale values according to contract expectations
-		const priceScaled = Math.floor(currentPrice * 1e6); // 6 decimals for price
+		const amountTokenOut = Math.floor((sizeInUSDT / currentPrice) * 1e9);
+		const priceScaled = Math.floor(currentPrice * 1e6);
 
 		// Check balance before executing trade
 		const accountData = await this.getUserAccountData(pairIndex);
@@ -966,21 +953,20 @@ export class MagicBlockClient {
 			throw new Error(`Trading account not found for pair ${pairIndex}. Please initialize first.`);
 		}
 
-		// For BUY: check if we have enough USDT (token_in_balance)
-		// For SELL: check if we have enough tokens (token_out_balance)
+		const requiredTokenAmount = amountTokenOut / 1e9;
+		const availableTokenAmount = accountData.tokenOutBalance;
+
 		if (action === 'BUY') {
 			const requiredUSDT = sizeInUSDT;
-			const availableUSDT = accountData.tokenInBalance / 1e6; // Convert from scaled balance
-			console.log(`[MAGICBLOCK] BUY check - Required: ${requiredUSDT}, Available: ${availableUSDT}`);
+			const availableUSDT = accountData.tokenInBalance;
+			console.log(`[MAGICBLOCK] BUY check - Required USDT: ${requiredUSDT}, Available: ${availableUSDT}`);
 			if (availableUSDT < requiredUSDT) {
 				throw new Error(`Insufficient USDT balance. Required: ${requiredUSDT}, Available: ${availableUSDT.toFixed(2)}`);
 			}
 		} else {
-			const requiredTokens = sizeInUSDT; // For SELL, sizeInUSDT is token amount
-			const availableTokens = accountData.tokenOutBalance / 1e9; // Convert from scaled balance
-			console.log(`[MAGICBLOCK] SELL check - Required: ${requiredTokens}, Available: ${availableTokens}`);
-			if (availableTokens < requiredTokens) {
-				throw new Error(`Insufficient token balance. Required: ${requiredTokens}, Available: ${availableTokens.toFixed(6)}`);
+			console.log(`[MAGICBLOCK] SELL check - Required tokens: ${requiredTokenAmount}, Available: ${availableTokenAmount}`);
+			if (availableTokenAmount < requiredTokenAmount) {
+				throw new Error(`Insufficient token balance. Required: ${requiredTokenAmount.toFixed(6)}, Available: ${availableTokenAmount.toFixed(6)}`);
 			}
 		}
 
