@@ -1,42 +1,110 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { magicBlockClient } from '$lib/magicblock';
+	import { walletStore } from '$lib/wallet/stores';
+	import WalletButton from '$lib/wallet/WalletButton.svelte';
 
 	let currentTime = new Date().toLocaleTimeString();
 	let competitionEndTime = new Date(Date.now() + 2538000);
 	let timeRemaining = '00:42:18';
 
-	let leaderboard = [
-		{ rank: 1, player: '7kDx...w2Qp', balance: 14250.50, pnl: 4250.50, pnlPct: 42.51, trades: 23, volume: 89234, lastTrade: 'LONG SOL @198.50', status: 'ACTIVE' },
-		{ rank: 2, player: '9mFg...k5Hn', balance: 13890.25, pnl: 3890.25, pnlPct: 38.90, trades: 19, volume: 72451, lastTrade: 'SHORT BTC @43210', status: 'ACTIVE' },
-		{ rank: 3, player: '3bVc...p8Yz', balance: 12675.00, pnl: 2675.00, pnlPct: 26.75, trades: 31, volume: 95123, lastTrade: 'LONG ETH @2234', status: 'ACTIVE' },
-		{ rank: 4, player: '5nTr...j4Kl', balance: 11950.75, pnl: 1950.75, pnlPct: 19.51, trades: 15, volume: 45678, lastTrade: 'SHORT SOL @198.20', status: 'ACTIVE' },
-		{ rank: 5, player: '8qWx...m7Pb', balance: 11420.00, pnl: 1420.00, pnlPct: 14.20, trades: 28, volume: 78234, lastTrade: 'LONG AVAX @34.50', status: 'ACTIVE' },
-		{ rank: 6, player: '2cYz...r3Nm', balance: 10880.50, pnl: 880.50, pnlPct: 8.81, trades: 12, volume: 34567, lastTrade: 'LONG LINK @14.23', status: 'ACTIVE' },
-		{ rank: 7, player: '6jKl...v9Qx', balance: 10550.25, pnl: 550.25, pnlPct: 5.50, trades: 18, volume: 52341, lastTrade: 'SHORT BTC @43195', status: 'ACTIVE' },
-		{ rank: 8, player: '4dRt...b2Ws', balance: 10120.00, pnl: 120.00, pnlPct: 1.20, trades: 9, volume: 28934, lastTrade: 'LONG SOL @198.15', status: 'ACTIVE' },
-		{ rank: 9, player: '1hPq...n8Zx', balance: 9875.50, pnl: -124.50, pnlPct: -1.25, trades: 14, volume: 41234, lastTrade: 'SHORT ETH @2230', status: 'ACTIVE' },
-		{ rank: 10, player: '7xMk...t5Cv', balance: 9650.00, pnl: -350.00, pnlPct: -3.50, trades: 11, volume: 35678, lastTrade: 'LONG BTC @43180', status: 'ACTIVE' }
-	];
+	let leaderboard: any[] = [];
 
-	let recentActivity = [
-		{ time: '14:32:18', player: '7kDx...w2Qp', action: 'OPENED', direction: 'LONG', symbol: 'SOL', price: 198.50, size: 500, type: 'ENTRY' },
-		{ time: '14:32:15', player: '3bVc...p8Yz', action: 'CLOSED', direction: 'SHORT', symbol: 'BTC', price: 43210, size: 200, pnl: 450, type: 'EXIT' },
-		{ time: '14:32:12', player: '9mFg...k5Hn', action: 'OPENED', direction: 'SHORT', symbol: 'BTC', price: 43210, size: 300, type: 'ENTRY' },
-		{ time: '14:32:08', player: '5nTr...j4Kl', action: 'CLOSED', direction: 'LONG', symbol: 'ETH', price: 2234, size: 400, pnl: -125, type: 'EXIT' },
-		{ time: '14:32:05', player: '8qWx...m7Pb', action: 'OPENED', direction: 'LONG', symbol: 'AVAX', price: 34.50, size: 600, type: 'ENTRY' },
-		{ time: '14:32:01', player: '2cYz...r3Nm', action: 'OPENED', direction: 'LONG', symbol: 'LINK', price: 14.23, size: 350, type: 'ENTRY' },
-		{ time: '14:31:58', player: '7kDx...w2Qp', action: 'CLOSED', direction: 'SHORT', symbol: 'SOL', price: 198.30, size: 450, pnl: 325, type: 'EXIT' },
-		{ time: '14:31:54', player: '6jKl...v9Qx', action: 'OPENED', direction: 'SHORT', symbol: 'BTC', price: 43195, size: 250, type: 'ENTRY' }
-	];
+	let recentActivity: any[] = [];
 
 	let competitionStats = {
-		totalVolume: 1234567,
-		totalTrades: 847,
-		avgTradeSize: 1458,
-		topGainer: '+$4,250.50',
-		topLoser: '-$2,134.25',
-		mostActive: '31 trades'
+		totalVolume: 0,
+		totalTrades: 0,
+		avgTradeSize: 0,
+		topGainer: '+$0.00',
+		topLoser: '$0.00',
+		mostActive: '0 trades'
 	};
+
+	let connectedWallet: any = null;
+	let walletAddress = '';
+	let isJoined = false;
+	let isJoining = false;
+	let competitionStatus = 'Loading...';
+
+	// Subscribe to wallet changes
+	walletStore.subscribe(wallet => {
+		connectedWallet = wallet;
+		if (wallet.connected && wallet.publicKey) {
+			walletAddress = wallet.publicKey.toBase58();
+			magicBlockClient.setConnectedWallet(wallet.adapter);
+			checkCompetitionStatus();
+		} else {
+			walletAddress = '';
+			isJoined = false;
+			competitionStatus = 'Connect wallet to join competition';
+		}
+	});
+
+	async function checkCompetitionStatus() {
+		try {
+			// Check if user has already joined the competition
+			// This would query the competition component to see if user has a trading account
+			competitionStatus = 'Ready to join competition';
+		} catch (error) {
+			console.error('[COMPETITION] Failed to check status:', error);
+			competitionStatus = 'Status check failed';
+		}
+	}
+
+	async function joinCompetition() {
+		if (!connectedWallet?.connected) {
+			alert('Please connect your wallet first');
+			return;
+		}
+
+		if (isJoining) return;
+
+		try {
+			isJoining = true;
+			competitionStatus = 'Joining competition...';
+			
+			// Call the join-competition system through MagicBlock
+			const signature = await magicBlockClient.joinCompetition();
+			
+			isJoined = true;
+			competitionStatus = `Competition joined! ${signature.substring(0, 8)}...`;
+			
+			// Refresh leaderboard data
+			await fetchLeaderboard();
+		} catch (error: any) {
+			console.error('[COMPETITION] Failed to join:', error);
+			competitionStatus = `Join failed: ${error.message}`;
+		} finally {
+			isJoining = false;
+		}
+	}
+
+	async function fetchLeaderboard() {
+		try {
+			// Fetch real leaderboard data from the competition components
+			const data = await magicBlockClient.fetchLeaderboard();
+			leaderboard = data;
+			
+			// Update competition stats
+			if (data.length > 0) {
+				competitionStats.topGainer = `+$${Math.max(...data.map(p => p.pnl)).toFixed(2)}`;
+				competitionStats.mostActive = `${Math.max(...data.map(p => p.trades))} trades`;
+			}
+		} catch (error) {
+			console.error('[COMPETITION] Failed to fetch leaderboard:', error);
+		}
+	}
+
+	async function fetchRecentActivity() {
+		try {
+			// This would fetch recent trading activity from position components
+			// For now, we'll implement this when position tracking is added
+			console.log('[COMPETITION] Fetching recent activity...');
+		} catch (error) {
+			console.error('[COMPETITION] Failed to fetch activity:', error);
+		}
+	}
 
 	function updateTime() {
 		currentTime = new Date().toLocaleTimeString();
@@ -52,35 +120,33 @@
 		}
 	}
 
-	function addRecentActivity() {
-		const players = ['7kDx...w2Qp', '9mFg...k5Hn', '3bVc...p8Yz', '5nTr...j4Kl', '8qWx...m7Pb'];
-		const symbols = ['SOL', 'BTC', 'ETH', 'AVAX', 'LINK'];
-		const directions = ['LONG', 'SHORT'];
-		const actions = ['OPENED', 'CLOSED'];
 
-		const newActivity = {
-			time: new Date().toLocaleTimeString(),
-			player: players[Math.floor(Math.random() * players.length)],
-			action: actions[Math.floor(Math.random() * actions.length)],
-			direction: directions[Math.floor(Math.random() * directions.length)],
-			symbol: symbols[Math.floor(Math.random() * symbols.length)],
-			price: Math.random() * 1000 + 100,
-			size: Math.floor(Math.random() * 500 + 100),
-			pnl: Math.random() > 0.5 ? Math.floor(Math.random() * 500 - 250) : undefined,
-			type: Math.random() > 0.5 ? 'ENTRY' : 'EXIT'
-		};
+	onMount(async () => {
+		console.log('[COMPETITION] Initializing competition page...');
+		
+		// Initialize MagicBlock client
+		try {
+			await magicBlockClient.initializeSessionWallet();
+		} catch (error) {
+			console.error('[COMPETITION] Failed to initialize MagicBlock:', error);
+		}
 
-		recentActivity = [newActivity, ...recentActivity.slice(0, 19)];
-	}
-
-	onMount(() => {
 		updateTime();
 		const timeInterval = setInterval(updateTime, 1000);
-		const activityInterval = setInterval(addRecentActivity, 3000);
+		
+		// Fetch initial data
+		await fetchLeaderboard();
+		await fetchRecentActivity();
+		
+		// Set up periodic data fetching
+		const dataInterval = setInterval(async () => {
+			await fetchLeaderboard();
+			await fetchRecentActivity();
+		}, 5000); // Refresh every 5 seconds
 
 		return () => {
 			clearInterval(timeInterval);
-			clearInterval(activityInterval);
+			clearInterval(dataInterval);
 		};
 	});
 </script>
@@ -97,6 +163,17 @@
 			<span class="status-item">TIME: {timeRemaining}</span>
 			<span class="status-item">VOL: ${(competitionStats.totalVolume / 1000).toFixed(0)}K</span>
 			<span class="status-item">TRADES: {competitionStats.totalTrades}</span>
+			{#if connectedWallet?.connected}
+				<span class="status-item">
+					{walletAddress.substring(0, 4)}...{walletAddress.substring(walletAddress.length - 4)}
+				</span>
+				<span class="status-item {isJoined ? 'joined' : 'not-joined'}">
+					{competitionStatus}
+				</span>
+			{/if}
+		</div>
+		<div class="wallet-section">
+			<WalletButton />
 		</div>
 	</div>
 
@@ -183,7 +260,22 @@
 
 		<div class="join-panel">
 			<div class="nft-info">
-				<div class="nft-header">NFT TROPHY REWARDS</div>
+				<div class="nft-header">
+					NFT TROPHY REWARDS
+					{#if connectedWallet?.connected && !isJoined}
+						<button 
+							class="join-button" 
+							disabled={isJoining}
+							on:click={joinCompetition}
+						>
+							{isJoining ? 'JOINING...' : 'JOIN COMPETITION'}
+						</button>
+					{:else if !connectedWallet?.connected}
+						<span class="join-hint">Connect wallet to join competition</span>
+					{:else if isJoined}
+						<span class="joined-indicator">✓ JOINED</span>
+					{/if}
+				</div>
 				<div class="nft-tiers">
 					<div class="nft-tier">
 						<div class="tier-rank gold">1ST PLACE</div>
@@ -530,5 +622,66 @@
 		line-height: 1.5;
 		padding-top: 10px;
 		border-top: 1px solid #222;
+	}
+
+	.wallet-section {
+		margin-left: auto;
+		display: flex;
+		align-items: center;
+	}
+
+	.status-item.joined {
+		background: #00ff00;
+		color: #000;
+	}
+
+	.status-item.not-joined {
+		background: #ff9500;
+		color: #000;
+	}
+
+	.nft-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 15px;
+	}
+
+	.join-button {
+		background: #00ff00;
+		color: #000;
+		border: none;
+		padding: 8px 16px;
+		font-family: 'Courier New', monospace;
+		font-size: 11px;
+		font-weight: bold;
+		cursor: pointer;
+		letter-spacing: 1px;
+		transition: all 0.2s ease;
+	}
+
+	.join-button:hover:not(:disabled) {
+		background: #33ff33;
+		transform: scale(1.05);
+	}
+
+	.join-button:disabled {
+		opacity: 0.6;
+		cursor: not-allowed;
+	}
+
+	.join-hint {
+		color: #666;
+		font-size: 10px;
+		font-style: italic;
+	}
+
+	.joined-indicator {
+		background: #00ff00;
+		color: #000;
+		padding: 4px 8px;
+		font-size: 10px;
+		font-weight: bold;
+		letter-spacing: 1px;
 	}
 </style>

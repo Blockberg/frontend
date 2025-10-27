@@ -51,13 +51,7 @@
 	let pythUpdateInterval: any = null;
 	let pythStatus = 'Initializing...';
 	let pythLastUpdate = 0;
-	let leaderboardData = [
-		{ rank: 1, address: '0x7a2e9f...3f4b', pnl: 12450.00, trades: 47 },
-		{ rank: 2, address: '0x9b1c4a...8c2d', pnl: 8230.50, trades: 32 },
-		{ rank: 3, address: '0x4d5f8e...1a9c', pnl: 5670.25, trades: 28 },
-		{ rank: 4, address: '0x2c8b3f...7e1a', pnl: 3120.00, trades: 19 },
-		{ rank: 5, address: '0x6f2a9d...4c8b', pnl: -1450.75, trades: 15 },
-	];
+	let leaderboardData: any[] = [];
 
 	let walletAddress = '';
 	let walletBalance = 0;
@@ -353,19 +347,7 @@
 		totalTrades += 1;
 		if (pnl > 0) winningTrades += 1;
 
-		const playerExists = leaderboardData.find(p => p.address === 'YOU (Paper)');
-		if (playerExists) {
-			playerExists.pnl = totalPnL;
-			playerExists.trades = totalTrades;
-		} else {
-			leaderboardData = [
-				...leaderboardData,
-				{ rank: 0, address: 'YOU (Paper)', pnl: totalPnL, trades: totalTrades }
-			];
-		}
-
-		leaderboardData.sort((a, b) => b.pnl - a.pnl);
-		leaderboardData = leaderboardData.map((item, index) => ({ ...item, rank: index + 1 }));
+		// Real leaderboard updates would be handled by the competition contract
 
 		console.log(`Closed ${position.direction} ${position.symbol} - P&L: $${pnl.toFixed(2)}`);
 		activePositions = activePositions.filter(p => p.id !== id);

@@ -926,6 +926,186 @@ export class MagicBlockClient {
 		return accountData;
 	}
 
+	async joinCompetition(): Promise<string> {
+		const currentWallet = this.getCurrentWallet();
+		if (!currentWallet || !this.entityPda || !this.competitionEntity) {
+			throw new Error('Wallet not connected or entity not initialized');
+		}
+
+		console.log('[MAGICBLOCK] Joining competition via Bolt system...');
+
+		try {
+			const { transaction } = await ApplySystem({
+				authority: currentWallet.publicKey,
+				systemId: SYSTEM_IDS.JOIN_COMPETITION,
+				entities: [
+					{
+						entity: this.competitionEntity,
+						components: [{ componentId: COMPONENT_IDS.COMPETITION }],
+					},
+					{
+						entity: this.entityPda,
+						components: [{ componentId: COMPONENT_IDS.TRADING_ACCOUNT }],
+					},
+				],
+				world: WORLD_INSTANCE_ID,
+			});
+
+			// Get fresh blockhash and set transaction properties
+			const latestBlockhash = await this.connection.getLatestBlockhash('confirmed');
+			transaction.recentBlockhash = latestBlockhash.blockhash;
+			transaction.feePayer = currentWallet.publicKey;
+
+			// Sign and send transaction
+			let signature: string;
+			if (currentWallet.signTransaction) {
+				console.log('[MAGICBLOCK] Signing join competition transaction...');
+				const signedTx = await currentWallet.signTransaction(transaction);
+				signature = await this.connection.sendRawTransaction(signedTx.serialize(), {
+					skipPreflight: false,
+					preflightCommitment: 'confirmed'
+				});
+				
+				// Wait for confirmation
+				await this.connection.confirmTransaction({
+					signature,
+					blockhash: latestBlockhash.blockhash,
+					lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+				}, 'confirmed');
+			} else if (this.sessionWallet) {
+				// Fallback to session wallet signing
+				signature = await sendAndConfirmTransaction(
+					this.connection,
+					transaction,
+					[this.sessionWallet],
+					{ commitment: 'confirmed' }
+				);
+			} else {
+				throw new Error('No signing method available');
+			}
+
+			console.log('[MAGICBLOCK] Competition joined:', signature);
+			return signature;
+		} catch (error) {
+			console.error('[MAGICBLOCK] Failed to join competition:', error);
+			throw error;
+		}
+	}
+
+	async fetchLeaderboard(): Promise<any[]> {
+		if (!this.competitionEntity) {
+			return [];
+		}
+
+		try {
+			console.log('[MAGICBLOCK] Fetching leaderboard from competition components...');
+			
+			const tradingAccountAccounts = await this.connection.getProgramAccounts(COMPONENT_IDS.TRADING_ACCOUNT, {
+				filters: [
+					{
+						memcmp: {
+							offset: 8, // Skip discriminator
+							bytes: this.competitionEntity.toBase58() // Filter by competition entity
+						}
+					}
+				]
+			});
+
+			const leaderboard = [];
+			for (const accountInfo of tradingAccountAccounts) {
+				try {
+					// Parse trading account data
+					// This would need to match the TradingAccount component structure
+					// const data = accountInfo.account.data;
+					// TODO: Add parsing logic based on the actual TradingAccount structure
+					
+					leaderboard.push({
+						address: accountInfo.pubkey.toBase58(),
+						pnl: 0, // Parse from actual data structure
+						trades: 0, // Parse from actual data structure  
+						balance: 10000, // Parse from actual data structure
+					});
+				} catch (parseError) {
+					console.warn('[MAGICBLOCK] Failed to parse trading account:', parseError);
+				}
+			}
+
+			// Sort by PnL descending
+			leaderboard.sort((a, b) => b.pnl - a.pnl);
+			
+			// Add ranks
+			return leaderboard.map((entry, index) => ({
+				...entry,
+				rank: index + 1
+			}));
+		} catch (error) {
+			console.warn('[MAGICBLOCK] Failed to fetch leaderboard:', error);
+			return [];
+		}
+	}
+
+	async settleCompetition(): Promise<string> {
+		const currentWallet = this.getCurrentWallet();
+		if (!currentWallet || !this.competitionEntity) {
+			throw new Error('Wallet not connected or competition entity not initialized');
+		}
+
+		console.log('[MAGICBLOCK] Settling competition via Bolt system...');
+
+		try {
+			const { transaction } = await ApplySystem({
+				authority: currentWallet.publicKey,
+				systemId: SYSTEM_IDS.SETTLE_COMPETITION,
+				entities: [
+					{
+						entity: this.competitionEntity,
+						components: [{ componentId: COMPONENT_IDS.COMPETITION }],
+					},
+				],
+				world: WORLD_INSTANCE_ID,
+			});
+
+			// Get fresh blockhash and set transaction properties
+			const latestBlockhash = await this.connection.getLatestBlockhash('confirmed');
+			transaction.recentBlockhash = latestBlockhash.blockhash;
+			transaction.feePayer = currentWallet.publicKey;
+
+			// Sign and send transaction
+			let signature: string;
+			if (currentWallet.signTransaction) {
+				console.log('[MAGICBLOCK] Signing settle competition transaction...');
+				const signedTx = await currentWallet.signTransaction(transaction);
+				signature = await this.connection.sendRawTransaction(signedTx.serialize(), {
+					skipPreflight: false,
+					preflightCommitment: 'confirmed'
+				});
+				
+				// Wait for confirmation
+				await this.connection.confirmTransaction({
+					signature,
+					blockhash: latestBlockhash.blockhash,
+					lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+				}, 'confirmed');
+			} else if (this.sessionWallet) {
+				// Fallback to session wallet signing
+				signature = await sendAndConfirmTransaction(
+					this.connection,
+					transaction,
+					[this.sessionWallet],
+					{ commitment: 'confirmed' }
+				);
+			} else {
+				throw new Error('No signing method available');
+			}
+
+			console.log('[MAGICBLOCK] Competition settled:', signature);
+			return signature;
+		} catch (error) {
+			console.error('[MAGICBLOCK] Failed to settle competition:', error);
+			throw error;
+		}
+	}
+
 	async mintTrophyNFT(
 		rank: number,
 		winnerAddress: PublicKey,
