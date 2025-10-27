@@ -78,6 +78,22 @@
 		}
 	});
 
+	async function fetchOnChainPositions() {
+		if (!connectedWallet?.connected) {
+			onChainPositions = [];
+			return;
+		}
+
+		try {
+			console.log('[WALLET] Fetching on-chain positions...');
+			onChainPositions = await magicBlockClient.fetchPositions();
+			console.log('[WALLET] Found', onChainPositions.length, 'on-chain positions:', onChainPositions);
+		} catch (error) {
+			console.error('[WALLET] Failed to fetch on-chain positions:', error);
+			onChainPositions = [];
+		}
+	}
+
 	async function updateWalletStatus() {
 		try {
 			walletBalance = await magicBlockClient.getBalance();
@@ -88,8 +104,7 @@
 			console.log('[WALLET] Mock token balances:', mockTokenBalances);
 			
 			// Fetch on-chain positions
-			onChainPositions = await magicBlockClient.fetchPositions();
-			console.log('[WALLET] On-chain positions:', onChainPositions);
+			await fetchOnChainPositions();
 			
 			// Update status based on account initialization
 			const totalPairs = Object.keys(TRADING_PAIRS).length;
@@ -322,21 +337,42 @@
 		stopLoss = '';
 	}
 
-	async function closePosition(id: number) {
-		const position = activePositions.find(p => p.id === id);
-		if (!position) return;
-
+	async function closePosition(id: number | string) {
 		if (isOnChainMode && connectedWallet?.connected) {
 			try {
 				magicBlockStatus = 'Closing position on-chain...';
-				const txSig = await magicBlockClient.closePosition(id.toString());
-				console.log('[TRADING] Position closed on-chain:', txSig);
+				
+				// Check if this is a direct contract position (has pubkey) or traditional position
+				const onChainPos = onChainPositions.find(p => p.pubkey === id);
+				let txSig: string;
+				
+				if (onChainPos) {
+					// This is a direct contract position - use closeDirectPosition
+					const currentPrice = prices[onChainPos.pairSymbol]?.price || onChainPos.entryPrice;
+					txSig = await magicBlockClient.closeDirectPosition(id.toString(), currentPrice);
+					console.log('[TRADING] Direct contract position closed:', txSig);
+				} else {
+					// This is a traditional MagicBlock/Bolt position
+					txSig = await magicBlockClient.closePosition(id.toString());
+					console.log('[TRADING] MagicBlock position closed:', txSig);
+				}
+				
 				magicBlockStatus = `Position closed: ${txSig.substring(0, 8)}...`;
+				
+				// Refresh positions after successful close
+				setTimeout(async () => {
+					await fetchOnChainPositions();
+				}, 2000);
+				
 			} catch (error: any) {
 				console.error('[TRADING] Failed to close position:', error);
 				magicBlockStatus = `Error: ${error.message}`;
 			}
 		}
+
+		// Handle traditional position closing for off-chain mode
+		const position = activePositions.find(p => p.id === id);
+		if (!position) return;
 
 		const currentPrice = prices[position.symbol].price;
 		const pnl = position.direction === 'LONG'
@@ -384,6 +420,13 @@
 			console.error('[AIRDROP] Failed:', error);
 			magicBlockStatus = `Airdrop failed - check console`;
 		}
+	}
+
+	// Reactive statement to fetch positions when wallet connects
+	$: if (connectedWallet?.connected) {
+		setTimeout(async () => {
+			await fetchOnChainPositions();
+		}, 1000);
 	}
 
 	$: {
@@ -437,6 +480,20 @@
 
 		setInterval(fetchNews, 300000);
 		setInterval(updateTime, 1000);
+
+		// Fetch positions regularly (every 10 seconds)
+		setInterval(async () => {
+			if (connectedWallet?.connected) {
+				await fetchOnChainPositions();
+			}
+		}, 10000);
+
+		// Initial position fetch when page loads (after wallet might be connected)
+		setTimeout(async () => {
+			if (connectedWallet?.connected) {
+				await fetchOnChainPositions();
+			}
+		}, 3000);
 
 		console.log('[APP] Blockberg Terminal ready');
 
@@ -691,13 +748,31 @@
 									</div>
 									<div class="position-details">
 										{#if position.type === 'direct'}
-											<span>Entry: ${position.entryPrice.toFixed(2)}</span>
-											<span class="position-current-price">
-												Current: ${prices[selectedTab].price.toFixed(2)}
-											</span>
-											<span class={((position.direction === 'LONG' ? prices[selectedTab].price - position.entryPrice : position.entryPrice - prices[selectedTab].price) >= 0) ? 'pnl-up' : 'pnl-down'}>
-												P&L: ${((position.direction === 'LONG' ? prices[selectedTab].price - position.entryPrice : position.entryPrice - prices[selectedTab].price) * position.amountTokenOut).toFixed(2)}
-											</span>
+											<div class="position-row">
+												<span>Entry: ${position.entryPrice.toFixed(2)}</span>
+												<span>Size: {position.amountTokenOut.toFixed(4)} {position.pairSymbol}</span>
+											</div>
+											<div class="position-row">
+												<span class="position-current-price">
+													Current: ${prices[position.pairSymbol]?.price.toFixed(2) || 'Loading...'}
+												</span>
+												{#if position.takeProfitPrice}
+													<span class="tp-price">TP: ${position.takeProfitPrice.toFixed(2)}</span>
+												{/if}
+											</div>
+											<div class="position-row">
+												{#if position.stopLossPrice}
+													<span class="sl-price">SL: ${position.stopLossPrice.toFixed(2)}</span>
+												{/if}
+												<span class="position-time">
+													Opened: {position.openedAt.toLocaleString()}
+												</span>
+											</div>
+											<div class="position-row">
+												<span class={((position.direction === 'LONG' ? (prices[position.pairSymbol]?.price || position.entryPrice) - position.entryPrice : position.entryPrice - (prices[position.pairSymbol]?.price || position.entryPrice)) >= 0) ? 'pnl-up' : 'pnl-down'}>
+													P&L: ${((position.direction === 'LONG' ? (prices[position.pairSymbol]?.price || position.entryPrice) - position.entryPrice : position.entryPrice - (prices[position.pairSymbol]?.price || position.entryPrice)) * position.amountTokenOut).toFixed(2)}
+												</span>
+											</div>
 										{:else}
 											<span class="position-data">Data: {position.data}</span>
 										{/if}
@@ -1429,8 +1504,36 @@
 
 	.position-details {
 		display: flex;
-		gap: 15px;
+		flex-direction: column;
+		gap: 8px;
 		color: #fff;
+	}
+
+	.position-row {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: 15px;
+	}
+
+	.tp-price {
+		color: #00ff00;
+		font-size: 0.9em;
+	}
+
+	.sl-price {
+		color: #ff4444;
+		font-size: 0.9em;
+	}
+
+	.position-time {
+		color: #888;
+		font-size: 0.8em;
+	}
+
+	.position-current-price {
+		color: #ffd700;
+		font-weight: bold;
 	}
 
 	.close-button {

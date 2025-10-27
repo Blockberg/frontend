@@ -133,23 +133,22 @@ export class MagicBlockClient {
 		try {
 			console.log('[MAGICBLOCK] Initializing trading account for pair', pairIndex);
 
-			// Create connection to main Solana (not ephemeral)
-			const mainConnection = new Connection('https://api.devnet.solana.com', 'confirmed');
+			// Use MagicBlock connection only
 			
 			const [userAccountPDA] = this.getUserAccountPDA(currentWallet.publicKey, pairIndex);
 			const [configPDA] = this.getConfigPDA();
 			
 			// Check if account already exists
-			const existingAccount = await mainConnection.getAccountInfo(userAccountPDA);
+			const existingAccount = await this.connection.getAccountInfo(userAccountPDA);
 			if (existingAccount) {
 				console.log('[MAGICBLOCK] Account already initialized for pair', pairIndex);
 				return 'account_already_exists';
 			}
 			
-			// Get treasury from config on main chain
-			const configAccountInfo = await mainConnection.getAccountInfo(configPDA);
+			// Get treasury from config
+			const configAccountInfo = await this.connection.getAccountInfo(configPDA);
 			if (!configAccountInfo) {
-				throw new Error('Config account not found on main chain');
+				throw new Error('Config account not found');
 			}
 			const treasuryPubkey = new PublicKey(configAccountInfo.data.subarray(40, 72));
 
@@ -187,7 +186,7 @@ export class MagicBlockClient {
 			const transaction = new Transaction().add(instruction);
 			
 			// Get fresh blockhash to avoid duplicate transaction issues
-			const latestBlockhash = await mainConnection.getLatestBlockhash('finalized');
+			const latestBlockhash = await this.connection.getLatestBlockhash('finalized');
 			transaction.recentBlockhash = latestBlockhash.blockhash;
 			transaction.feePayer = currentWallet.publicKey;
 
@@ -203,10 +202,20 @@ export class MagicBlockClient {
 			let signature: string;
 			if (currentWallet.signTransaction) {
 				const signedTx = await currentWallet.signTransaction(transaction);
-				signature = await mainConnection.sendRawTransaction(signedTx.serialize(), {
-					skipPreflight: false,
-					preflightCommitment: 'finalized'
-				});
+				try {
+					signature = await this.connection.sendRawTransaction(signedTx.serialize(), {
+						skipPreflight: false,
+						preflightCommitment: 'finalized'
+					});
+				} catch (error: any) {
+					if (error.name === 'SendTransactionError') {
+						console.error('[MAGICBLOCK] SendTransactionError details:', error.getLogs?.() || 'No logs available');
+						if (error.message?.includes('This transaction has already been processed')) {
+							throw new Error('Transaction already processed. Please wait a moment before trying again.');
+						}
+					}
+					throw error;
+				}
 			} else {
 				throw new Error('Wallet does not support transaction signing');
 			}
@@ -214,7 +223,7 @@ export class MagicBlockClient {
 			console.log('[MAGICBLOCK] Account initialized on main chain:', signature);
 			
 			// Wait for confirmation
-			await mainConnection.confirmTransaction(signature, 'confirmed');
+			await this.connection.confirmTransaction(signature, 'confirmed');
 			
 			return signature;
 		} catch (error) {
@@ -509,10 +518,42 @@ export class MagicBlockClient {
 
 		console.log('[MAGICBLOCK] Signing paper trading transaction on MagicBlock rollup...');
 		const signedTx = await currentWallet.signTransaction(transaction);
-		const signature = await this.connection.sendRawTransaction(signedTx.serialize(), {
-			skipPreflight: false,
-			preflightCommitment: 'confirmed'
-		});
+		
+		let signature: string;
+		try {
+			signature = await this.connection.sendRawTransaction(signedTx.serialize(), {
+				skipPreflight: false,
+				preflightCommitment: 'confirmed'
+			});
+		} catch (error: any) {
+			if (error.name === 'SendTransactionError') {
+				console.error('[MAGICBLOCK] SendTransactionError details:', error.getLogs?.() || 'No logs available');
+				if (error.message?.includes('This transaction has already been processed')) {
+					// Check if we can extract the signature from the error or transaction
+					// If the transaction was already processed, it likely succeeded
+					console.log('[MAGICBLOCK] Transaction may have already succeeded, checking...');
+					
+					// Try to get the signature from the serialized transaction
+					try {
+						const txSignature = signedTx.signatures[0]?.toString();
+						if (txSignature) {
+							console.log('[MAGICBLOCK] Found transaction signature:', txSignature);
+							// Check transaction status
+							const status = await this.connection.getSignatureStatus(txSignature);
+							if (status.value?.confirmationStatus) {
+								console.log('[MAGICBLOCK] Transaction already confirmed:', txSignature);
+								return txSignature;
+							}
+						}
+					} catch (sigError) {
+						console.warn('[MAGICBLOCK] Could not check transaction status:', sigError);
+					}
+					
+					throw new Error('Transaction already processed. Please wait a moment before trying again.');
+				}
+			}
+			throw error;
+		}
 
 		// Wait for confirmation on MagicBlock
 		await this.connection.confirmTransaction({
@@ -534,13 +575,12 @@ export class MagicBlockClient {
 		takeProfit?: number,
 		stopLoss?: number
 	): Promise<string> {
-		// Use the main Solana connection for direct contract calls
-		const mainConnection = new Connection(SOLANA_RPC, 'confirmed');
+		// Use MagicBlock connection only to avoid rate limits
 		
 		const [userAccountPDA] = this.getUserAccountPDA(currentWallet.publicKey, pairIndex);
 		
 		// Check if account is initialized
-		const accountInfo = await mainConnection.getAccountInfo(userAccountPDA);
+		const accountInfo = await this.connection.getAccountInfo(userAccountPDA);
 		if (!accountInfo) {
 			throw new Error(`Trading account not initialized for pair ${pairIndex}. Please initialize first.`);
 		}
@@ -551,11 +591,8 @@ export class MagicBlockClient {
 		const takeProfitScaled = takeProfit ? Math.floor(takeProfit * 1e6) : 0;
 		const stopLossScaled = stopLoss ? Math.floor(stopLoss * 1e6) : 0;
 
-		// Check balance using main connection to get the most up-to-date data
-		const tempConnection = this.connection;
-		this.connection = mainConnection; // Temporarily switch connection
+		// Check balance using MagicBlock connection
 		const accountData = await this.getUserAccountData(pairIndex);
-		this.connection = tempConnection; // Switch back
 		
 		if (!accountData) {
 			throw new Error(`Trading account not found for pair ${pairIndex}. Please initialize first.`);
@@ -624,25 +661,154 @@ export class MagicBlockClient {
 		const transaction = new Transaction().add(instruction);
 		
 		// Get fresh blockhash
-		const latestBlockhash = await mainConnection.getLatestBlockhash('confirmed');
+		const latestBlockhash = await this.connection.getLatestBlockhash('confirmed');
 		transaction.recentBlockhash = latestBlockhash.blockhash;
 		transaction.feePayer = currentWallet.publicKey;
 
 		console.log('[MAGICBLOCK] Signing direct contract transaction...');
 		const signedTx = await currentWallet.signTransaction(transaction);
-		const signature = await mainConnection.sendRawTransaction(signedTx.serialize(), {
-			skipPreflight: false,
-			preflightCommitment: 'confirmed'
-		});
+		
+		let signature: string;
+		try {
+			signature = await this.connection.sendRawTransaction(signedTx.serialize(), {
+				skipPreflight: false,
+				preflightCommitment: 'confirmed'
+			});
+		} catch (error: any) {
+			if (error.name === 'SendTransactionError') {
+				console.error('[MAGICBLOCK] SendTransactionError details:', error.getLogs?.() || 'No logs available');
+				if (error.message?.includes('This transaction has already been processed')) {
+					// Check if the transaction actually succeeded
+					console.log('[MAGICBLOCK] Transaction may have already succeeded, checking...');
+					
+					try {
+						const txSignature = signedTx.signatures[0]?.toString();
+						if (txSignature) {
+							console.log('[MAGICBLOCK] Found transaction signature:', txSignature);
+							const status = await this.connection.getSignatureStatus(txSignature);
+							if (status.value?.confirmationStatus) {
+								console.log('[MAGICBLOCK] Transaction already confirmed:', txSignature);
+								return txSignature;
+							}
+						}
+					} catch (sigError) {
+						console.warn('[MAGICBLOCK] Could not check transaction status:', sigError);
+					}
+					
+					throw new Error('Transaction already processed. Please wait a moment before trying again.');
+				}
+			}
+			throw error;
+		}
 
 		// Wait for confirmation
-		await mainConnection.confirmTransaction({
+		await this.connection.confirmTransaction({
 			signature,
 			blockhash: latestBlockhash.blockhash,
 			lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
 		}, 'confirmed');
 
 		console.log('[MAGICBLOCK] Direct contract position opened:', signature);
+		return signature;
+	}
+
+	async closeDirectPosition(positionPubkey: string, currentPrice: number): Promise<string> {
+		const currentWallet = this.getCurrentWallet();
+		if (!currentWallet) {
+			throw new Error('Wallet not connected');
+		}
+
+		console.log('[MAGICBLOCK] Closing direct contract position:', positionPubkey);
+
+		// Use MagicBlock connection only to avoid rate limits
+		
+		// Get position account to read the data
+		const positionAccountPubkey = new PublicKey(positionPubkey);
+		const positionAccount = await this.connection.getAccountInfo(positionAccountPubkey);
+		if (!positionAccount) {
+			throw new Error('Position account not found');
+		}
+
+		// Parse position data to get pair_index
+		const data = positionAccount.data;
+		let offset = 8; // Skip discriminator
+		offset += 32; // Skip owner
+		const pairIndex = data[offset]; // pair_index
+
+		// Get user account PDA
+		const [userAccountPDA] = this.getUserAccountPDA(currentWallet.publicKey, pairIndex);
+
+		// Create the instruction data for close_position
+		const methodName = "global:close_position";
+		const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(methodName));
+		const discriminator = new Uint8Array(hash).slice(0, 8);
+
+		// Create instruction data buffer (discriminator + current_price u64)
+		const instructionData = Buffer.alloc(8 + 8); // 8 bytes discriminator + 8 bytes for u64
+		Buffer.from(discriminator).copy(instructionData, 0);
+		instructionData.writeBigUInt64LE(BigInt(Math.floor(currentPrice * 1e6)), 8); // Price with 6 decimals
+
+		const instruction = new TransactionInstruction({
+			keys: [
+				{ pubkey: positionAccountPubkey, isSigner: false, isWritable: true },
+				{ pubkey: userAccountPDA, isSigner: false, isWritable: true },
+				{ pubkey: currentWallet.publicKey, isSigner: true, isWritable: false },
+			],
+			programId: PAPER_TRADING_PROGRAM_ID,
+			data: instructionData
+		});
+
+		const transaction = new Transaction().add(instruction);
+		
+		// Get fresh blockhash
+		const latestBlockhash = await this.connection.getLatestBlockhash('confirmed');
+		transaction.recentBlockhash = latestBlockhash.blockhash;
+		transaction.feePayer = currentWallet.publicKey;
+
+		console.log('[MAGICBLOCK] Signing close position transaction...');
+		const signedTx = await currentWallet.signTransaction!(transaction);
+		
+		let signature: string;
+		try {
+			signature = await this.connection.sendRawTransaction(signedTx.serialize(), {
+				skipPreflight: false,
+				preflightCommitment: 'confirmed'
+			});
+		} catch (error: any) {
+			if (error.name === 'SendTransactionError') {
+				console.error('[MAGICBLOCK] SendTransactionError details:', error.getLogs?.() || 'No logs available');
+				if (error.message?.includes('This transaction has already been processed')) {
+					// Check if the transaction actually succeeded
+					console.log('[MAGICBLOCK] Transaction may have already succeeded, checking...');
+					
+					try {
+						const txSignature = signedTx.signatures[0]?.toString();
+						if (txSignature) {
+							console.log('[MAGICBLOCK] Found transaction signature:', txSignature);
+							const status = await this.connection.getSignatureStatus(txSignature);
+							if (status.value?.confirmationStatus) {
+								console.log('[MAGICBLOCK] Transaction already confirmed:', txSignature);
+								return txSignature;
+							}
+						}
+					} catch (sigError) {
+						console.warn('[MAGICBLOCK] Could not check transaction status:', sigError);
+					}
+					
+					throw new Error('Transaction already processed. Please wait a moment before trying again.');
+				}
+			}
+			throw error;
+		}
+
+		// Wait for confirmation
+		await this.connection.confirmTransaction({
+			signature,
+			blockhash: latestBlockhash.blockhash,
+			lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+		}, 'confirmed');
+
+		console.log('[MAGICBLOCK] Position closed:', signature);
 		return signature;
 	}
 
@@ -687,10 +853,20 @@ export class MagicBlockClient {
 			if (currentWallet.signTransaction) {
 				console.log('[MAGICBLOCK] Signing close position transaction...');
 				const signedTx = await currentWallet.signTransaction(transaction);
-				signature = await this.connection.sendRawTransaction(signedTx.serialize(), {
-					skipPreflight: false,
-					preflightCommitment: 'confirmed'
-				});
+				try {
+					signature = await this.connection.sendRawTransaction(signedTx.serialize(), {
+						skipPreflight: false,
+						preflightCommitment: 'confirmed'
+					});
+				} catch (error: any) {
+					if (error.name === 'SendTransactionError') {
+						console.error('[MAGICBLOCK] SendTransactionError details:', error.getLogs?.() || 'No logs available');
+						if (error.message?.includes('This transaction has already been processed')) {
+							throw new Error('Transaction already processed. Please wait a moment before trying again.');
+						}
+					}
+					throw error;
+				}
 				
 				// Wait for confirmation
 				await this.connection.confirmTransaction({
@@ -761,23 +937,57 @@ export class MagicBlockClient {
 			}
 		}
 
-		// Also fetch direct contract positions
+		// Fetch direct contract positions using MagicBlock rollup only
 		try {
-			console.log('[MAGICBLOCK] Fetching direct contract positions...');
-			const mainConnection = new Connection(SOLANA_RPC, 'confirmed');
+			console.log('[MAGICBLOCK] Fetching contract positions via MagicBlock rollup...');
+			console.log('[MAGICBLOCK] Current wallet:', currentWallet.publicKey.toBase58());
 
-			const directPositions = await mainConnection.getProgramAccounts(PAPER_TRADING_PROGRAM_ID, {
-				filters: [
-					{
-						memcmp: {
-							offset: 8, // Skip discriminator
-							bytes: currentWallet.publicKey.toBase58() // Filter by user
-						}
-					},
-					{
-						dataSize: 8 + 32 + 1 + 8 + 8 + 8 + 8 + 1 + 8 + 8 // Size of PositionAccount struct
-					}
-				]
+			// Use MagicBlock rollup connection - all positions are on the rollup
+			console.log('[MAGICBLOCK] Getting all program accounts via MagicBlock rollup...');
+			const allAccounts = await this.connection.getProgramAccounts(PAPER_TRADING_PROGRAM_ID);
+			console.log('[MAGICBLOCK] Found', allAccounts.length, 'total program accounts via MagicBlock rollup');
+
+			// Debug: check what account sizes we have
+			const accountSizes = new Map();
+			allAccounts.forEach(account => {
+				const size = account.account.data.length;
+				accountSizes.set(size, (accountSizes.get(size) || 0) + 1);
+			});
+			console.log('[MAGICBLOCK] Account sizes found:', Array.from(accountSizes.entries()));
+
+			// Calculate expected sizes for different account types:
+			// UserAccount: discriminator(8) + owner(32) + pair_index(1) + token_in_balance(8) + token_out_balance(8) + total_positions(8) + created_at(8)
+			const userAccountSize = 80; // From debug: actual size is 80
+			// PositionAccount: From debug, actual size is 104 bytes
+			const positionAccountSize = 104; // From debug: actual size is 104
+			console.log('[MAGICBLOCK] UserAccount size (actual):', userAccountSize);
+			console.log('[MAGICBLOCK] PositionAccount size (actual):', positionAccountSize);
+
+			// Filter for position accounts by checking data size and structure
+			const directPositions = allAccounts.filter(accountInfo => {
+				const data = accountInfo.account.data;
+				
+				console.log('[MAGICBLOCK] Checking account:', accountInfo.pubkey.toBase58(), 'size:', data.length);
+				
+				// Check if it matches PositionAccount size
+				if (data.length !== positionAccountSize) {
+					console.log('[MAGICBLOCK] Size mismatch - not a PositionAccount (expected', positionAccountSize, ')');
+					return false;
+				}
+
+				// Check if owner matches (skip discriminator, owner starts at offset 8)
+				try {
+					const ownerBytes = data.subarray(8, 8 + 32);
+					const ownerPubkey = new PublicKey(ownerBytes);
+					const isOurAccount = ownerPubkey.equals(currentWallet.publicKey);
+					
+					console.log('[MAGICBLOCK] Account owner:', ownerPubkey.toBase58(), 'matches:', isOurAccount);
+					
+					return isOurAccount;
+				} catch (error) {
+					console.warn('[MAGICBLOCK] Failed to parse owner:', error);
+					return false;
+				}
 			});
 
 			for (const accountInfo of directPositions) {
@@ -786,12 +996,59 @@ export class MagicBlockClient {
 					const data = accountInfo.account.data;
 					const dataView = new DataView(data.buffer, data.byteOffset, data.byteLength);
 					
-					// Skip discriminator (8) + owner (32) + pair_index (1)
-					const positionId = dataView.getBigUint64(8 + 32 + 1, true);
-					const positionType = data[8 + 32 + 1 + 8]; // 0 = Long, 1 = Short
-					const amountTokenOut = dataView.getBigUint64(8 + 32 + 1 + 8 + 1, true);
-					const entryPrice = dataView.getBigUint64(8 + 32 + 1 + 8 + 1 + 8, true);
-					const status = data[8 + 32 + 1 + 8 + 1 + 8 + 8 + 8 + 8]; // 0 = Active, 1 = Closed
+					// Parse according to PositionAccount struct from main.rs:
+					// owner: Pubkey (32), pair_index: u8 (1), position_id: u64 (8)
+					// position_type: PositionType (1), amount_token_out: u64 (8)
+					// entry_price: u64 (8), take_profit_price: u64 (8), stop_loss_price: u64 (8)
+					// status: PositionStatus (1), opened_at: i64 (8), closed_at: i64 (8)
+					
+					let offset = 8; // Skip discriminator
+					
+					// owner: Pubkey (32 bytes)
+					offset += 32;
+					
+					// pair_index: u8 (1 byte)
+					const pairIndex = data[offset];
+					offset += 1;
+					
+					// position_id: u64 (8 bytes)
+					const positionId = dataView.getBigUint64(offset, true);
+					offset += 8;
+					
+					// position_type: PositionType (1 byte) - 0 = Long, 1 = Short  
+					const positionType = data[offset];
+					offset += 1;
+					
+					// amount_token_out: u64 (8 bytes)
+					const amountTokenOut = dataView.getBigUint64(offset, true);
+					offset += 8;
+					
+					// entry_price: u64 (8 bytes)
+					const entryPrice = dataView.getBigUint64(offset, true);
+					offset += 8;
+					
+					// take_profit_price: u64 (8 bytes)
+					const takeProfitPrice = dataView.getBigUint64(offset, true);
+					offset += 8;
+					
+					// stop_loss_price: u64 (8 bytes)
+					const stopLossPrice = dataView.getBigUint64(offset, true);
+					offset += 8;
+					
+					// status: PositionStatus (1 byte) - 0 = Active, 1 = Closed
+					const status = data[offset];
+					offset += 1;
+					
+					// opened_at: i64 (8 bytes)
+					const openedAt = dataView.getBigInt64(offset, true);
+					offset += 8;
+					
+					// closed_at: i64 (8 bytes)
+					const closedAt = dataView.getBigInt64(offset, true);
+
+					// Get pair symbol
+					const pairSymbols = ['SOL', 'BTC', 'ETH', 'AVAX', 'LINK'];
+					const pairSymbol = pairSymbols[pairIndex] || 'UNKNOWN';
 
 					if (status === 0) { // Only show active positions
 						positions.push({
@@ -799,8 +1056,13 @@ export class MagicBlockClient {
 							pubkey: accountInfo.pubkey.toBase58(),
 							positionId: positionId.toString(),
 							direction: positionType === 0 ? 'LONG' : 'SHORT',
+							pairIndex,
+							pairSymbol,
 							amountTokenOut: Number(amountTokenOut) / 1e9,
 							entryPrice: Number(entryPrice) / 1e6,
+							takeProfitPrice: takeProfitPrice > 0 ? Number(takeProfitPrice) / 1e6 : null,
+							stopLossPrice: stopLossPrice > 0 ? Number(stopLossPrice) / 1e6 : null,
+							openedAt: new Date(Number(openedAt) * 1000),
 							status: 'ACTIVE'
 						});
 					}
@@ -961,10 +1223,20 @@ export class MagicBlockClient {
 			if (currentWallet.signTransaction) {
 				console.log('[MAGICBLOCK] Signing join competition transaction...');
 				const signedTx = await currentWallet.signTransaction(transaction);
-				signature = await this.connection.sendRawTransaction(signedTx.serialize(), {
-					skipPreflight: false,
-					preflightCommitment: 'confirmed'
-				});
+				try {
+					signature = await this.connection.sendRawTransaction(signedTx.serialize(), {
+						skipPreflight: false,
+						preflightCommitment: 'confirmed'
+					});
+				} catch (error: any) {
+					if (error.name === 'SendTransactionError') {
+						console.error('[MAGICBLOCK] SendTransactionError details:', error.getLogs?.() || 'No logs available');
+						if (error.message?.includes('This transaction has already been processed')) {
+							throw new Error('Transaction already processed. Please wait a moment before trying again.');
+						}
+					}
+					throw error;
+				}
 				
 				// Wait for confirmation
 				await this.connection.confirmTransaction({
@@ -1075,10 +1347,20 @@ export class MagicBlockClient {
 			if (currentWallet.signTransaction) {
 				console.log('[MAGICBLOCK] Signing settle competition transaction...');
 				const signedTx = await currentWallet.signTransaction(transaction);
-				signature = await this.connection.sendRawTransaction(signedTx.serialize(), {
-					skipPreflight: false,
-					preflightCommitment: 'confirmed'
-				});
+				try {
+					signature = await this.connection.sendRawTransaction(signedTx.serialize(), {
+						skipPreflight: false,
+						preflightCommitment: 'confirmed'
+					});
+				} catch (error: any) {
+					if (error.name === 'SendTransactionError') {
+						console.error('[MAGICBLOCK] SendTransactionError details:', error.getLogs?.() || 'No logs available');
+						if (error.message?.includes('This transaction has already been processed')) {
+							throw new Error('Transaction already processed. Please wait a moment before trying again.');
+						}
+					}
+					throw error;
+				}
 				
 				// Wait for confirmation
 				await this.connection.confirmTransaction({
