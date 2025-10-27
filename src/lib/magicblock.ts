@@ -915,6 +915,153 @@ export class MagicBlockClient {
 		return signature;
 	}
 
+	async executeSpotTrade(
+		pairSymbol: string,
+		action: 'BUY' | 'SELL',
+		currentPrice: number,
+		sizeInUSDT: number
+	): Promise<string> {
+		const currentWallet = this.getCurrentWallet();
+		if (!currentWallet) {
+			throw new Error('Wallet not connected');
+		}
+
+		console.log('[MAGICBLOCK] Executing spot trade:', {
+			pair: pairSymbol,
+			action,
+			price: currentPrice,
+			sizeInUSDT,
+		});
+
+		const pairIndex = TRADING_PAIRS[pairSymbol as keyof typeof TRADING_PAIRS];
+		if (pairIndex === undefined) {
+			throw new Error(`Unknown trading pair: ${pairSymbol}`);
+		}
+
+		// Check if account is initialized
+		const [userAccountPDA] = this.getUserAccountPDA(currentWallet.publicKey, pairIndex);
+		const accountInfo = await this.connection.getAccountInfo(userAccountPDA);
+		if (!accountInfo) {
+			throw new Error(`Trading account not initialized for pair ${pairIndex}. Please initialize first.`);
+		}
+
+		// Calculate amount of tokens based on USDT size and current price
+		// For BUY: amountTokenOut = sizeInUSDT / currentPrice (how many tokens we get for that USDT amount)
+		// For SELL: amountTokenOut = sizeInUSDT (directly the token amount to sell)
+		let amountTokenOut: number;
+		if (action === 'BUY') {
+			// For buying: convert USDT size to token amount
+			amountTokenOut = Math.floor((sizeInUSDT / currentPrice) * 1e9); // 9 decimals for token amount
+		} else {
+			// For selling: sizeInUSDT is actually the token amount to sell
+			amountTokenOut = Math.floor(sizeInUSDT * 1e9); // 9 decimals for token amount
+		}
+
+		// Scale values according to contract expectations
+		const priceScaled = Math.floor(currentPrice * 1e6); // 6 decimals for price
+
+		// Check balance before executing trade
+		const accountData = await this.getUserAccountData(pairIndex);
+		if (!accountData) {
+			throw new Error(`Trading account not found for pair ${pairIndex}. Please initialize first.`);
+		}
+
+		// For BUY: check if we have enough USDT (token_in_balance)
+		// For SELL: check if we have enough tokens (token_out_balance)
+		if (action === 'BUY') {
+			const requiredUSDT = sizeInUSDT;
+			const availableUSDT = accountData.tokenInBalance / 1e6; // Convert from scaled balance
+			console.log(`[MAGICBLOCK] BUY check - Required: ${requiredUSDT}, Available: ${availableUSDT}`);
+			if (availableUSDT < requiredUSDT) {
+				throw new Error(`Insufficient USDT balance. Required: ${requiredUSDT}, Available: ${availableUSDT.toFixed(2)}`);
+			}
+		} else {
+			const requiredTokens = sizeInUSDT; // For SELL, sizeInUSDT is token amount
+			const availableTokens = accountData.tokenOutBalance / 1e9; // Convert from scaled balance
+			console.log(`[MAGICBLOCK] SELL check - Required: ${requiredTokens}, Available: ${availableTokens}`);
+			if (availableTokens < requiredTokens) {
+				throw new Error(`Insufficient token balance. Required: ${requiredTokens}, Available: ${availableTokens.toFixed(6)}`);
+			}
+		}
+
+		// Create the instruction data for buy/sell
+		let methodName: string;
+		if (action === 'BUY') {
+			methodName = "global:buy";
+		} else {
+			methodName = "global:sell";
+		}
+
+		const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(methodName));
+		const discriminator = new Uint8Array(hash).slice(0, 8);
+
+		// Create instruction data buffer (discriminator + amount_token_out u64 + price u64)
+		const instructionData = Buffer.alloc(8 + 8 + 8); // 8 bytes discriminator + 8 bytes amount + 8 bytes price
+		Buffer.from(discriminator).copy(instructionData, 0);
+		instructionData.writeBigUInt64LE(BigInt(amountTokenOut), 8);
+		instructionData.writeBigUInt64LE(BigInt(priceScaled), 16);
+
+		const instruction = new TransactionInstruction({
+			keys: [
+				{ pubkey: userAccountPDA, isSigner: false, isWritable: true },
+				{ pubkey: currentWallet.publicKey, isSigner: true, isWritable: true },
+			],
+			programId: PAPER_TRADING_PROGRAM_ID,
+			data: instructionData
+		});
+
+		const transaction = new Transaction().add(instruction);
+		
+		// Get fresh blockhash
+		const latestBlockhash = await this.connection.getLatestBlockhash('confirmed');
+		transaction.recentBlockhash = latestBlockhash.blockhash;
+		transaction.feePayer = currentWallet.publicKey;
+
+		console.log('[MAGICBLOCK] Signing spot trade transaction...');
+		const signedTx = await currentWallet.signTransaction!(transaction);
+		
+		let signature: string;
+		try {
+			signature = await this.connection.sendRawTransaction(signedTx.serialize(), {
+				skipPreflight: false,
+				preflightCommitment: 'confirmed'
+			});
+		} catch (error: any) {
+			if (error.name === 'SendTransactionError') {
+				console.error('[MAGICBLOCK] SendTransactionError details:', error.getLogs?.() || 'No logs available');
+				if (error.message?.includes('This transaction has already been processed')) {
+					// For spot trades, this usually means the trade was successful
+					console.log('[MAGICBLOCK] Spot trade already processed - treating as success');
+					
+					try {
+						const txSignature = signedTx.signatures[0]?.toString();
+						if (txSignature) {
+							console.log('[MAGICBLOCK] Returning spot trade signature:', txSignature);
+							return txSignature;
+						}
+					} catch (sigError) {
+						console.warn('[MAGICBLOCK] Could not extract signature:', sigError);
+					}
+					
+					// Return success indicator - trade likely completed successfully  
+					console.log('[MAGICBLOCK] Spot trade completed (already processed)');
+					return 'spot_trade_success';
+				}
+			}
+			throw error;
+		}
+
+		// Wait for confirmation
+		await this.connection.confirmTransaction({
+			signature,
+			blockhash: latestBlockhash.blockhash,
+			lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+		}, 'confirmed');
+
+		console.log('[MAGICBLOCK] Spot trade completed:', signature);
+		return signature;
+	}
+
 	async closePosition(positionId: string): Promise<string> {
 		const currentWallet = this.getCurrentWallet();
 		if (!currentWallet || !this.entityPda || !this.competitionEntity) {

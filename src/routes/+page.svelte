@@ -262,12 +262,77 @@
 
 	function executeCommand() {
 		const cmd = command.toUpperCase();
-		if (cmd.includes('SOL')) selectedTab = 'SOL';
-		else if (cmd.includes('BTC')) selectedTab = 'BTC';
-		else if (cmd.includes('ETH')) selectedTab = 'ETH';
-		else if (cmd.includes('AVAX')) selectedTab = 'AVAX';
-		else if (cmd.includes('LINK')) selectedTab = 'LINK';
+		if (cmd.includes('SOL')) switchTab('SOL');
+		else if (cmd.includes('BTC')) switchTab('BTC');
+		else if (cmd.includes('ETH')) switchTab('ETH');
+		else if (cmd.includes('AVAX')) switchTab('AVAX');
+		else if (cmd.includes('LINK')) switchTab('LINK');
 		command = '';
+	}
+
+	async function switchTab(newTab: string) {
+		console.log('[TAB] Switching from', selectedTab, 'to', newTab);
+		selectedTab = newTab;
+		
+		// Refresh account data for the new pair
+		if (connectedWallet?.connected) {
+			console.log('[TAB] Refreshing account data for pair:', newTab);
+			await updateWalletStatus();
+			await fetchOnChainPositions();
+		}
+	}
+
+	async function executeSpotTrade(action: 'BUY' | 'SELL') {
+		console.log('[TRADING] executeSpotTrade called with action:', action);
+		console.log('[TRADING] Wallet connected:', connectedWallet?.connected);
+		console.log('[TRADING] isOnChainMode:', isOnChainMode);
+		console.log('[TRADING] positionSize:', positionSize);
+		console.log('[TRADING] selectedTab:', selectedTab);
+		console.log('[TRADING] prices:', prices);
+
+		if (!connectedWallet?.connected) {
+			alert('Please connect your wallet to trade');
+			return;
+		}
+
+		const currentPrice = prices[selectedTab].price;
+		const size = parseFloat(positionSize);
+
+		console.log('[TRADING] Current price:', currentPrice);
+		console.log('[TRADING] Parsed size:', size);
+
+		if (size <= 0) {
+			alert('Please enter a valid position size');
+			return;
+		}
+
+		if (isOnChainMode && connectedWallet?.connected) {
+			try {
+				magicBlockStatus = `Executing ${action} trade on-chain...`;
+				
+				const txSig = await magicBlockClient.executeSpotTrade(
+					selectedTab,
+					action,
+					currentPrice,
+					size
+				);
+
+				console.log(`[TRADING] ${action} trade executed on-chain:`, txSig);
+				magicBlockStatus = `${action} trade completed: ${txSig.substring(0, 8)}...`;
+				
+				// Refresh balances after successful trade
+				setTimeout(async () => {
+					await updateWalletStatus();
+				}, 2000);
+			} catch (error: any) {
+				console.error(`[TRADING] Failed to execute ${action} trade:`, error);
+				magicBlockStatus = `Error - check console`;
+				return;
+			}
+		}
+
+		// Clear form
+		positionSize = '100';
 	}
 
 	async function openPosition(direction: 'LONG' | 'SHORT') {
@@ -605,11 +670,11 @@
 	</div>
 
 	<div class="tabs">
-		<button class="tab" class:active={selectedTab === 'SOL'} on:click={() => selectedTab = 'SOL'}>SOL EQUITY</button>
-		<button class="tab" class:active={selectedTab === 'BTC'} on:click={() => selectedTab = 'BTC'}>BTC EQUITY</button>
-		<button class="tab" class:active={selectedTab === 'ETH'} on:click={() => selectedTab = 'ETH'}>ETH EQUITY</button>
-		<button class="tab" class:active={selectedTab === 'AVAX'} on:click={() => selectedTab = 'AVAX'}>AVAX EQUITY</button>
-		<button class="tab" class:active={selectedTab === 'LINK'} on:click={() => selectedTab = 'LINK'}>LINK EQUITY</button>
+		<button class="tab" class:active={selectedTab === 'SOL'} on:click={() => switchTab('SOL')}>SOL EQUITY</button>
+		<button class="tab" class:active={selectedTab === 'BTC'} on:click={() => switchTab('BTC')}>BTC EQUITY</button>
+		<button class="tab" class:active={selectedTab === 'ETH'} on:click={() => switchTab('ETH')}>ETH EQUITY</button>
+		<button class="tab" class:active={selectedTab === 'AVAX'} on:click={() => switchTab('AVAX')}>AVAX EQUITY</button>
+		<button class="tab" class:active={selectedTab === 'LINK'} on:click={() => switchTab('LINK')}>LINK EQUITY</button>
 		<button class="tab">NEWS</button>
 		<button class="tab">LEADERBOARD</button>
 	</div>
@@ -711,44 +776,24 @@
 						SHORT
 					</button>
 				</div>
+				<div class="spot-trading-buttons-overlay">
+					<button class="spot-buy-button-overlay" on:click={() => executeSpotTrade('BUY')}>
+						BUY
+					</button>
+					<button class="spot-sell-button-overlay" on:click={() => executeSpotTrade('SELL')}>
+						SELL
+					</button>
+				</div>
 			</div>
 
-			{#if activePositions.length > 0 || onChainPositions.length > 0}
+			{#if onChainPositions.length > 0}
 				<div class="positions-panel">
 					<div class="positions-header">
-						ACTIVE POSITIONS
+						ON-CHAIN POSITIONS
 						<button class="refresh-positions-btn" on:click={fetchOnChainPositions} title="Refresh positions">↻</button>
 					</div>
 					
-					<!-- Paper Trading Positions -->
-					{#if activePositions.length > 0}
-						<div class="position-section">
-							<div class="section-label">PAPER POSITIONS</div>
-							{#each activePositions as position}
-								<div class="position-row paper-position">
-									<div class="position-info">
-										<span class="position-direction" class:long={position.direction === 'LONG'} class:short={position.direction === 'SHORT'}>
-											{position.direction}
-										</span>
-										<span>{position.symbol}</span>
-										<span class="position-size">${position.size}</span>
-									</div>
-									<div class="position-details">
-										<span>Entry: ${position.entryPrice.toFixed(2)}</span>
-										<span class={position.pnl >= 0 ? 'pnl-up' : 'pnl-down'}>
-											P&L: ${position.pnl.toFixed(2)}
-										</span>
-									</div>
-									<button class="close-button" on:click={() => closePosition(position.id)}>CLOSE</button>
-								</div>
-							{/each}
-						</div>
-					{/if}
-
-					<!-- On-Chain Positions -->
-					{#if onChainPositions.length > 0}
-						<div class="position-section">
-							<div class="section-label">ON-CHAIN POSITIONS</div>
+					<!-- On-Chain Positions Only -->
 							{#each onChainPositions as position}
 								<div class="position-row onchain-position">
 									<div class="position-info">
@@ -798,8 +843,6 @@
 									<button class="close-button" on:click={() => closePosition(position.pubkey)}>CLOSE</button>
 								</div>
 							{/each}
-						</div>
-					{/if}
 				</div>
 			{/if}
 		</div>
@@ -815,6 +858,7 @@
 				{@const currentPairIndex = TRADING_PAIRS[selectedTab]}
 				<div class="token-balances">
 					{#if mockTokenBalances[currentPairIndex]}
+						{@const pnl = mockTokenBalances[currentPairIndex].tokenInBalance - 10000}
 						<div class="balance-row">
 							<div class="pair-info">
 								<span class="pair-name">{selectedTab}/USDT</span>
@@ -829,9 +873,11 @@
 									<span class="token-label">{selectedTab}:</span>
 									<span class="token-amount">{mockTokenBalances[currentPairIndex].tokenOutBalance.toFixed(4)}</span>
 								</div>
-								<div class="token-balance positions-count">
-									<span class="token-label">POSITIONS:</span>
-									<span class="token-amount">{mockTokenBalances[currentPairIndex].totalPositions}</span>
+								<div class="token-balance pnl-balance">
+									<span class="token-label">P&L:</span>
+									<span class="token-amount" class:pnl-up={pnl >= 0} class:pnl-down={pnl < 0}>
+										{pnl >= 0 ? '+' : ''}{pnl.toFixed(2)}
+									</span>
 								</div>
 							</div>
 						</div>
@@ -1411,6 +1457,46 @@
 		color: #000;
 	}
 
+	.spot-trading-buttons-overlay {
+		display: flex;
+		gap: 10px;
+		margin-left: auto;
+	}
+
+	.spot-buy-button-overlay,
+	.spot-sell-button-overlay {
+		padding: 8px 24px;
+		font-family: 'Courier New', monospace;
+		font-size: 12px;
+		font-weight: bold;
+		border: 2px solid;
+		cursor: pointer;
+		transition: all 0.2s ease;
+		letter-spacing: 2px;
+	}
+
+	.spot-buy-button-overlay {
+		background: #001100;
+		color: #00cc00;
+		border-color: #00cc00;
+	}
+
+	.spot-buy-button-overlay:hover {
+		background: #00cc00;
+		color: #000;
+	}
+
+	.spot-sell-button-overlay {
+		background: #110000;
+		color: #cc0000;
+		border-color: #cc0000;
+	}
+
+	.spot-sell-button-overlay:hover {
+		background: #cc0000;
+		color: #000;
+	}
+
 	.chart-title {
 		color: #ff9500;
 		font-size: 11px;
@@ -1853,6 +1939,17 @@
 
 	.positions-count .token-amount {
 		color: #00ff00;
+	}
+
+	.pnl-balance {
+		border-top: 1px solid #333;
+		padding-top: 8px;
+		margin-top: 8px;
+	}
+
+	.pnl-balance .token-amount {
+		font-weight: bold;
+		font-size: 1.1em;
 	}
 
 	.no-wallet {
