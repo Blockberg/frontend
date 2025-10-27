@@ -1,8 +1,9 @@
 import { Connection, PublicKey, Keypair, LAMPORTS_PER_SOL, Transaction, sendAndConfirmTransaction, TransactionInstruction, SystemProgram } from '@solana/web3.js';
-import { FindComponentPda, FindEntityPda, ApplySystem, SerializeArgs, BN, anchor } from '@magicblock-labs/bolt-sdk';
+import { FindEntityPda, ApplySystem, SerializeArgs, BN, anchor } from '@magicblock-labs/bolt-sdk';
 import type { Adapter, SignerWalletAdapter } from '@solana/wallet-adapter-base';
 
 export const MAGICBLOCK_RPC = 'https://rpc.magicblock.app/devnet/';
+export const SOLANA_RPC = 'https://api.devnet.solana.com';
 
 // Paper Trading Program ID from the contract
 export const PAPER_TRADING_PROGRAM_ID = new PublicKey('2zaegVL5odaCikNPEzCnaicgvu1n9ueHZoQrvEPWX161');
@@ -350,8 +351,8 @@ export class MagicBlockClient {
 		stopLoss?: number
 	): Promise<string> {
 		const currentWallet = this.getCurrentWallet();
-		if (!currentWallet || !this.entityPda || !this.competitionEntity) {
-			throw new Error('Wallet not connected or entity not initialized');
+		if (!currentWallet) {
+			throw new Error('Wallet not connected');
 		}
 
 		console.log('[MAGICBLOCK] Opening position:', {
@@ -366,88 +367,283 @@ export class MagicBlockClient {
 			throw new Error(`Unknown trading pair: ${pairSymbol}`);
 		}
 
-		const priceScaled = Math.floor(currentPrice * 1e8);
-		const sizeScaled = Math.floor(size * 1e8);
-		const takeProfitScaled = takeProfit ? Math.floor(takeProfit * 1e8) : null;
-		const stopLossScaled = stopLoss ? Math.floor(stopLoss * 1e8) : null;
-
+		// First try MagicBlock rollup execution
 		try {
-			const competitionComponentPda = FindComponentPda({
-				componentId: COMPONENT_IDS.COMPETITION,
-				entity: this.competitionEntity,
-			});
-
-			const tradingAccountComponentPda = FindComponentPda({
-				componentId: COMPONENT_IDS.TRADING_ACCOUNT,
-				entity: this.entityPda,
-			});
-
-			const positionTimestamp = Date.now();
-			const positionEntityPda = FindEntityPda({
-				worldId: WORLD_ID,
-				seed: Buffer.from(`position_${positionTimestamp}`),
-			});
-
-			const positionComponentPda = FindComponentPda({
-				componentId: COMPONENT_IDS.POSITION,
-				entity: positionEntityPda,
-			});
-
-			const argsData = {
-			pair_index: pairIndex,
-			direction: direction === PositionDirection.Long ? 0 : 1,
-			current_price: priceScaled,
-			size: sizeScaled,
-			take_profit: takeProfitScaled || 0,
-			stop_loss: stopLossScaled || 0,
-		};
-
-		const args = SerializeArgs(argsData);
-
-			const { transaction } = await ApplySystem({
-				authority: currentWallet.publicKey,
-				systemId: SYSTEM_IDS.OPEN_POSITION,
-				entities: [
-					{
-						entity: this.competitionEntity,
-						components: [{ componentId: COMPONENT_IDS.COMPETITION }],
-					},
-					{
-						entity: this.entityPda,
-						components: [{ componentId: COMPONENT_IDS.TRADING_ACCOUNT }],
-					},
-					{
-						entity: positionEntityPda,
-						components: [{ componentId: COMPONENT_IDS.POSITION }],
-					},
-				],
-				world: WORLD_INSTANCE_ID,
-				args: args,
-			});
-
-			// Sign and send transaction
-			let signature: string;
-			if (currentWallet.signTransaction) {
-				const signedTx = await currentWallet.signTransaction(transaction);
-				signature = await this.connection.sendRawTransaction(signedTx.serialize());
-			} else if (this.sessionWallet) {
-				// Fallback to session wallet signing
-				signature = await sendAndConfirmTransaction(
-					this.connection,
-					transaction,
-					[this.sessionWallet],
-					{ commitment: 'confirmed' }
-				);
-			} else {
-				throw new Error('No signing method available');
-			}
-
-			console.log('[MAGICBLOCK] Position opened:', signature);
-			return signature;
+			return await this.openMagicBlockPosition(
+				currentWallet,
+				pairIndex,
+				direction,
+				currentPrice,
+				size,
+				takeProfit,
+				stopLoss
+			);
 		} catch (error) {
-			console.error('[MAGICBLOCK] Failed to open position:', error);
-			throw error;
+			console.warn('[MAGICBLOCK] MagicBlock rollup failed, falling back to direct contract:', error);
+			
+			// Fallback to direct contract call
+			return await this.openDirectPosition(
+				currentWallet,
+				pairIndex,
+				direction,
+				currentPrice,
+				size,
+				takeProfit,
+				stopLoss
+			);
 		}
+	}
+
+	private async openMagicBlockPosition(
+		currentWallet: any,
+		pairIndex: number,
+		direction: PositionDirection,
+		currentPrice: number,
+		size: number,
+		takeProfit?: number,
+		stopLoss?: number
+	): Promise<string> {
+		console.log('[MAGICBLOCK] Opening MagicBlock position via direct paper trading program...');
+		
+		// Instead of using Bolt systems, let's execute the paper trading program directly
+		// through the MagicBlock rollup, using the same logic as the direct contract
+		
+		const priceScaled = Math.floor(currentPrice * 1e6); // 6 decimals for price
+		// Calculate required token_in balance: size * currentPrice (both in their respective scales)
+		const requiredTokenIn = Math.floor(size * currentPrice * 1e6); // This should match token_in_balance scale
+		const amountTokenOut = Math.floor(size * 1e9); // 9 decimals for token amount
+		const takeProfitScaled = takeProfit ? Math.floor(takeProfit * 1e6) : 0;
+		const stopLossScaled = stopLoss ? Math.floor(stopLoss * 1e6) : 0;
+
+		// Check if user has sufficient balance before attempting the transaction
+		const accountData = await this.getUserAccountData(pairIndex);
+		if (!accountData) {
+			throw new Error(`Trading account not found for pair ${pairIndex}. Please initialize first.`);
+		}
+
+		const requiredBalance = requiredTokenIn / 1e6; // Convert back to readable format for comparison
+		console.log('[MAGICBLOCK] Balance check:', {
+			available: accountData.tokenInBalance,
+			required: requiredBalance,
+			size,
+			currentPrice
+		});
+
+		if (accountData.tokenInBalance < requiredBalance) {
+			throw new Error(`Insufficient balance. Required: ${requiredBalance.toFixed(2)} USDT, Available: ${accountData.tokenInBalance.toFixed(2)} USDT`);
+		}
+
+		console.log('[MAGICBLOCK] Trading params:', {
+			direction,
+			pairIndex,
+			priceScaled,
+			amountTokenOut: amountTokenOut.toString(),
+			takeProfitScaled,
+			stopLossScaled
+		});
+
+		// Get the user account PDA for this pair
+		const [userAccountPDA] = this.getUserAccountPDA(currentWallet.publicKey, pairIndex);
+		
+		// Check if account is initialized on MagicBlock
+		const accountInfo = await this.connection.getAccountInfo(userAccountPDA);
+		if (!accountInfo) {
+			throw new Error(`Trading account not initialized for pair ${pairIndex}. Please initialize first.`);
+		}
+
+		// Create the instruction data for the paper trading program
+		let methodName: string;
+		if (direction === PositionDirection.Long) {
+			methodName = "global:open_long_position";
+		} else {
+			methodName = "global:open_short_position";  
+		}
+
+		const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(methodName));
+		const discriminator = new Uint8Array(hash).slice(0, 8);
+
+		// Create instruction data buffer (discriminator + 4 u64s)
+		const instructionData = Buffer.alloc(8 + 32); // 8 bytes discriminator + 32 bytes for 4 u64s
+		Buffer.from(discriminator).copy(instructionData, 0);
+		instructionData.writeBigUInt64LE(BigInt(requiredTokenIn), 8); // Use requiredTokenIn for the amount
+		instructionData.writeBigUInt64LE(BigInt(priceScaled), 16);
+		instructionData.writeBigUInt64LE(BigInt(takeProfitScaled), 24);
+		instructionData.writeBigUInt64LE(BigInt(stopLossScaled), 32);
+
+		// Calculate position PDA - read total_positions from account data
+		const dataView = new DataView(accountInfo.data.buffer, accountInfo.data.byteOffset, accountInfo.data.byteLength);
+		const totalPositions = dataView.getBigUint64(8 + 32 + 1 + 8 + 8, true); // little endian
+		
+		// Convert totalPositions to little endian bytes (8 bytes for u64)
+		const totalPositionsBuffer = Buffer.allocUnsafe(8);
+		totalPositionsBuffer.writeBigUInt64LE(totalPositions);
+
+		const [positionPDA] = PublicKey.findProgramAddressSync(
+			[
+				Buffer.from('position'),
+				currentWallet.publicKey.toBuffer(),
+				Buffer.from([pairIndex]),
+				totalPositionsBuffer
+			],
+			PAPER_TRADING_PROGRAM_ID
+		);
+
+		// Create the transaction instruction to execute on MagicBlock
+		const instruction = new TransactionInstruction({
+			keys: [
+				{ pubkey: userAccountPDA, isSigner: false, isWritable: true },
+				{ pubkey: positionPDA, isSigner: false, isWritable: true },
+				{ pubkey: currentWallet.publicKey, isSigner: true, isWritable: true },
+				{ pubkey: SystemProgram.programId, isSigner: false, isWritable: false }
+			],
+			programId: PAPER_TRADING_PROGRAM_ID,
+			data: instructionData
+		});
+
+		const transaction = new Transaction().add(instruction);
+		
+		// Get fresh blockhash from MagicBlock connection
+		const latestBlockhash = await this.connection.getLatestBlockhash('confirmed');
+		transaction.recentBlockhash = latestBlockhash.blockhash;
+		transaction.feePayer = currentWallet.publicKey;
+
+		console.log('[MAGICBLOCK] Signing paper trading transaction on MagicBlock rollup...');
+		const signedTx = await currentWallet.signTransaction(transaction);
+		const signature = await this.connection.sendRawTransaction(signedTx.serialize(), {
+			skipPreflight: false,
+			preflightCommitment: 'confirmed'
+		});
+
+		// Wait for confirmation on MagicBlock
+		await this.connection.confirmTransaction({
+			signature,
+			blockhash: latestBlockhash.blockhash,
+			lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+		}, 'confirmed');
+
+		console.log('[MAGICBLOCK] MagicBlock rollup position opened:', signature);
+		return signature;
+	}
+
+	private async openDirectPosition(
+		currentWallet: any,
+		pairIndex: number,
+		direction: PositionDirection,
+		currentPrice: number,
+		size: number,
+		takeProfit?: number,
+		stopLoss?: number
+	): Promise<string> {
+		// Use the main Solana connection for direct contract calls
+		const mainConnection = new Connection(SOLANA_RPC, 'confirmed');
+		
+		const [userAccountPDA] = this.getUserAccountPDA(currentWallet.publicKey, pairIndex);
+		
+		// Check if account is initialized
+		const accountInfo = await mainConnection.getAccountInfo(userAccountPDA);
+		if (!accountInfo) {
+			throw new Error(`Trading account not initialized for pair ${pairIndex}. Please initialize first.`);
+		}
+
+		const priceScaled = Math.floor(currentPrice * 1e6); // 6 decimals for price
+		const requiredTokenIn = Math.floor(size * currentPrice * 1e6); // Required balance for the position
+		const amountTokenOut = Math.floor(size * 1e9); // 9 decimals for token amount
+		const takeProfitScaled = takeProfit ? Math.floor(takeProfit * 1e6) : 0;
+		const stopLossScaled = stopLoss ? Math.floor(stopLoss * 1e6) : 0;
+
+		// Check balance using main connection to get the most up-to-date data
+		const tempConnection = this.connection;
+		this.connection = mainConnection; // Temporarily switch connection
+		const accountData = await this.getUserAccountData(pairIndex);
+		this.connection = tempConnection; // Switch back
+		
+		if (!accountData) {
+			throw new Error(`Trading account not found for pair ${pairIndex}. Please initialize first.`);
+		}
+
+		const requiredBalance = requiredTokenIn / 1e6; // Convert back to readable format
+		console.log('[MAGICBLOCK] Direct contract balance check:', {
+			available: accountData.tokenInBalance,
+			required: requiredBalance,
+			size,
+			currentPrice
+		});
+
+		if (accountData.tokenInBalance < requiredBalance) {
+			throw new Error(`Insufficient balance. Required: ${requiredBalance.toFixed(2)} USDT, Available: ${accountData.tokenInBalance.toFixed(2)} USDT`);
+		}
+
+		// Create the instruction data
+		let methodName: string;
+		if (direction === PositionDirection.Long) {
+			methodName = "global:open_long_position";
+		} else {
+			methodName = "global:open_short_position";  
+		}
+
+		const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(methodName));
+		const discriminator = new Uint8Array(hash).slice(0, 8);
+
+		// Create instruction data buffer (discriminator + 4 u64s)
+		const instructionData = Buffer.alloc(8 + 32); // 8 bytes discriminator + 32 bytes for 4 u64s
+		Buffer.from(discriminator).copy(instructionData, 0);
+		instructionData.writeBigUInt64LE(BigInt(requiredTokenIn), 8); // Use requiredTokenIn for the amount
+		instructionData.writeBigUInt64LE(BigInt(priceScaled), 16);
+		instructionData.writeBigUInt64LE(BigInt(takeProfitScaled), 24);
+		instructionData.writeBigUInt64LE(BigInt(stopLossScaled), 32);
+
+		// Calculate position PDA - read total_positions from account data
+		const dataView = new DataView(accountInfo.data.buffer, accountInfo.data.byteOffset, accountInfo.data.byteLength);
+		const totalPositions = dataView.getBigUint64(8 + 32 + 1 + 8 + 8, true); // little endian
+		
+		// Convert totalPositions to little endian bytes (8 bytes for u64)
+		const totalPositionsBuffer = Buffer.allocUnsafe(8);
+		totalPositionsBuffer.writeBigUInt64LE(totalPositions);
+
+		const [positionPDA] = PublicKey.findProgramAddressSync(
+			[
+				Buffer.from('position'),
+				currentWallet.publicKey.toBuffer(),
+				Buffer.from([pairIndex]),
+				totalPositionsBuffer
+			],
+			PAPER_TRADING_PROGRAM_ID
+		);
+
+		const instruction = new TransactionInstruction({
+			keys: [
+				{ pubkey: userAccountPDA, isSigner: false, isWritable: true },
+				{ pubkey: positionPDA, isSigner: false, isWritable: true },
+				{ pubkey: currentWallet.publicKey, isSigner: true, isWritable: true },
+				{ pubkey: SystemProgram.programId, isSigner: false, isWritable: false }
+			],
+			programId: PAPER_TRADING_PROGRAM_ID,
+			data: instructionData
+		});
+
+		const transaction = new Transaction().add(instruction);
+		
+		// Get fresh blockhash
+		const latestBlockhash = await mainConnection.getLatestBlockhash('confirmed');
+		transaction.recentBlockhash = latestBlockhash.blockhash;
+		transaction.feePayer = currentWallet.publicKey;
+
+		console.log('[MAGICBLOCK] Signing direct contract transaction...');
+		const signedTx = await currentWallet.signTransaction(transaction);
+		const signature = await mainConnection.sendRawTransaction(signedTx.serialize(), {
+			skipPreflight: false,
+			preflightCommitment: 'confirmed'
+		});
+
+		// Wait for confirmation
+		await mainConnection.confirmTransaction({
+			signature,
+			blockhash: latestBlockhash.blockhash,
+			lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+		}, 'confirmed');
+
+		console.log('[MAGICBLOCK] Direct contract position opened:', signature);
+		return signature;
 	}
 
 	async closePosition(positionId: string): Promise<string> {
@@ -481,11 +677,27 @@ export class MagicBlockClient {
 				world: WORLD_INSTANCE_ID,
 			});
 
+			// Get fresh blockhash and set transaction properties
+			const latestBlockhash = await this.connection.getLatestBlockhash('confirmed');
+			transaction.recentBlockhash = latestBlockhash.blockhash;
+			transaction.feePayer = currentWallet.publicKey;
+
 			// Sign and send transaction
 			let signature: string;
 			if (currentWallet.signTransaction) {
+				console.log('[MAGICBLOCK] Signing close position transaction...');
 				const signedTx = await currentWallet.signTransaction(transaction);
-				signature = await this.connection.sendRawTransaction(signedTx.serialize());
+				signature = await this.connection.sendRawTransaction(signedTx.serialize(), {
+					skipPreflight: false,
+					preflightCommitment: 'confirmed'
+				});
+				
+				// Wait for confirmation
+				await this.connection.confirmTransaction({
+					signature,
+					blockhash: latestBlockhash.blockhash,
+					lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+				}, 'confirmed');
 			} else if (this.sessionWallet) {
 				// Fallback to session wallet signing
 				signature = await sendAndConfirmTransaction(
@@ -507,17 +719,103 @@ export class MagicBlockClient {
 	}
 
 	async fetchPositions(): Promise<any[]> {
-		if (!this.sessionWallet) {
+		const currentWallet = this.getCurrentWallet();
+		if (!currentWallet) {
 			return [];
 		}
 
-		try {
-			console.log('[MAGICBLOCK] Fetching positions...');
-			return [];
-		} catch (error) {
-			console.error('[MAGICBLOCK] Failed to fetch positions:', error);
-			return [];
+		let positions: any[] = [];
+
+		// Try to fetch MagicBlock positions first
+		if (this.entityPda) {
+			try {
+				console.log('[MAGICBLOCK] Fetching MagicBlock positions...');
+				
+				const positionAccounts = await this.connection.getProgramAccounts(COMPONENT_IDS.POSITION, {
+					filters: [
+						{
+							memcmp: {
+								offset: 8, // Skip discriminator
+								bytes: this.entityPda.toBase58() // Filter by entity
+							}
+						}
+					]
+				});
+
+				for (const accountInfo of positionAccounts) {
+					try {
+						const data = accountInfo.account.data;
+						positions.push({
+							type: 'magicblock',
+							pubkey: accountInfo.pubkey.toBase58(),
+							data: data.toString('hex').substring(0, 100) + '...'
+						});
+					} catch (parseError) {
+						console.warn('[MAGICBLOCK] Failed to parse MagicBlock position:', parseError);
+					}
+				}
+
+				console.log('[MAGICBLOCK] Found', positions.length, 'MagicBlock positions');
+			} catch (error) {
+				console.warn('[MAGICBLOCK] Failed to fetch MagicBlock positions:', error);
+			}
 		}
+
+		// Also fetch direct contract positions
+		try {
+			console.log('[MAGICBLOCK] Fetching direct contract positions...');
+			const mainConnection = new Connection(SOLANA_RPC, 'confirmed');
+
+			const directPositions = await mainConnection.getProgramAccounts(PAPER_TRADING_PROGRAM_ID, {
+				filters: [
+					{
+						memcmp: {
+							offset: 8, // Skip discriminator
+							bytes: currentWallet.publicKey.toBase58() // Filter by user
+						}
+					},
+					{
+						dataSize: 8 + 32 + 1 + 8 + 8 + 8 + 8 + 1 + 8 + 8 // Size of PositionAccount struct
+					}
+				]
+			});
+
+			for (const accountInfo of directPositions) {
+				try {
+					// Parse position data from the contract
+					const data = accountInfo.account.data;
+					const dataView = new DataView(data.buffer, data.byteOffset, data.byteLength);
+					
+					// Skip discriminator (8) + owner (32) + pair_index (1)
+					const positionId = dataView.getBigUint64(8 + 32 + 1, true);
+					const positionType = data[8 + 32 + 1 + 8]; // 0 = Long, 1 = Short
+					const amountTokenOut = dataView.getBigUint64(8 + 32 + 1 + 8 + 1, true);
+					const entryPrice = dataView.getBigUint64(8 + 32 + 1 + 8 + 1 + 8, true);
+					const status = data[8 + 32 + 1 + 8 + 1 + 8 + 8 + 8 + 8]; // 0 = Active, 1 = Closed
+
+					if (status === 0) { // Only show active positions
+						positions.push({
+							type: 'direct',
+							pubkey: accountInfo.pubkey.toBase58(),
+							positionId: positionId.toString(),
+							direction: positionType === 0 ? 'LONG' : 'SHORT',
+							amountTokenOut: Number(amountTokenOut) / 1e9,
+							entryPrice: Number(entryPrice) / 1e6,
+							status: 'ACTIVE'
+						});
+					}
+				} catch (parseError) {
+					console.warn('[MAGICBLOCK] Failed to parse direct position:', parseError);
+				}
+			}
+
+			console.log('[MAGICBLOCK] Found', directPositions.length, 'direct contract positions');
+		} catch (error) {
+			console.warn('[MAGICBLOCK] Failed to fetch direct contract positions:', error);
+		}
+
+		console.log('[MAGICBLOCK] Total positions found:', positions.length);
+		return positions;
 	}
 
 	async requestAirdrop(amount: number = 1): Promise<string> {

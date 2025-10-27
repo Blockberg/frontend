@@ -39,6 +39,7 @@
 	let takeProfit = '';
 	let stopLoss = '';
 	let activePositions: any[] = [];
+	let onChainPositions: any[] = [];
 	let totalPnL = 0;
 	let totalTrades = 0;
 	let winningTrades = 0;
@@ -91,6 +92,10 @@
 			// Fetch mock token balances for all initialized accounts
 			mockTokenBalances = await magicBlockClient.getAllUserAccountData();
 			console.log('[WALLET] Mock token balances:', mockTokenBalances);
+			
+			// Fetch on-chain positions
+			onChainPositions = await magicBlockClient.fetchPositions();
+			console.log('[WALLET] On-chain positions:', onChainPositions);
 			
 			// Update status based on account initialization
 			const totalPairs = Object.keys(TRADING_PAIRS).length;
@@ -286,7 +291,18 @@
 				);
 
 				console.log('[TRADING] Position opened on-chain:', txSig);
-				magicBlockStatus = `Position opened: ${txSig.substring(0, 8)}...`;
+				
+				// Check if it's a MagicBlock or direct contract transaction
+				if (txSig.length > 50) {
+					magicBlockStatus = `Position opened (Direct): ${txSig.substring(0, 8)}...`;
+				} else {
+					magicBlockStatus = `Position opened (MagicBlock): ${txSig.substring(0, 8)}...`;
+				}
+				
+				// Refresh positions and balances after opening
+				setTimeout(async () => {
+					await updateWalletStatus();
+				}, 2000);
 			} catch (error: any) {
 				console.error('[TRADING] Failed to open position:', error);
 				magicBlockStatus = `Error - check console`;
@@ -643,27 +659,72 @@
 				</div>
 			</div>
 
-			{#if activePositions.length > 0}
+			{#if activePositions.length > 0 || onChainPositions.length > 0}
 				<div class="positions-panel">
 					<div class="positions-header">ACTIVE POSITIONS</div>
-					{#each activePositions as position}
-						<div class="position-row">
-							<div class="position-info">
-								<span class="position-direction" class:long={position.direction === 'LONG'} class:short={position.direction === 'SHORT'}>
-									{position.direction}
-								</span>
-								<span>{position.symbol}</span>
-								<span class="position-size">${position.size}</span>
-							</div>
-							<div class="position-details">
-								<span>Entry: ${position.entryPrice.toFixed(2)}</span>
-								<span class={position.pnl >= 0 ? 'pnl-up' : 'pnl-down'}>
-									P&L: ${position.pnl.toFixed(2)}
-								</span>
-							</div>
-							<button class="close-button" on:click={() => closePosition(position.id)}>CLOSE</button>
+					
+					<!-- Paper Trading Positions -->
+					{#if activePositions.length > 0}
+						<div class="position-section">
+							<div class="section-label">PAPER POSITIONS</div>
+							{#each activePositions as position}
+								<div class="position-row paper-position">
+									<div class="position-info">
+										<span class="position-direction" class:long={position.direction === 'LONG'} class:short={position.direction === 'SHORT'}>
+											{position.direction}
+										</span>
+										<span>{position.symbol}</span>
+										<span class="position-size">${position.size}</span>
+									</div>
+									<div class="position-details">
+										<span>Entry: ${position.entryPrice.toFixed(2)}</span>
+										<span class={position.pnl >= 0 ? 'pnl-up' : 'pnl-down'}>
+											P&L: ${position.pnl.toFixed(2)}
+										</span>
+									</div>
+									<button class="close-button" on:click={() => closePosition(position.id)}>CLOSE</button>
+								</div>
+							{/each}
 						</div>
-					{/each}
+					{/if}
+
+					<!-- On-Chain Positions -->
+					{#if onChainPositions.length > 0}
+						<div class="position-section">
+							<div class="section-label">ON-CHAIN POSITIONS</div>
+							{#each onChainPositions as position}
+								<div class="position-row onchain-position">
+									<div class="position-info">
+										{#if position.type === 'direct'}
+											<span class="position-direction" class:long={position.direction === 'LONG'} class:short={position.direction === 'SHORT'}>
+												{position.direction}
+											</span>
+											<span class="position-size">{position.amountTokenOut.toFixed(4)} {selectedTab}</span>
+										{:else}
+											<span class="position-direction onchain">
+												MAGICBLOCK
+											</span>
+										{/if}
+										<span class="position-address">{position.pubkey.substring(0, 8)}...</span>
+									</div>
+									<div class="position-details">
+										{#if position.type === 'direct'}
+											<span>Entry: ${position.entryPrice.toFixed(2)}</span>
+											<span class="position-current-price">
+												Current: ${prices[selectedTab].price.toFixed(2)}
+											</span>
+											<span class={((position.direction === 'LONG' ? prices[selectedTab].price - position.entryPrice : position.entryPrice - prices[selectedTab].price) >= 0) ? 'pnl-up' : 'pnl-down'}>
+												P&L: ${((position.direction === 'LONG' ? prices[selectedTab].price - position.entryPrice : position.entryPrice - prices[selectedTab].price) * position.amountTokenOut).toFixed(2)}
+											</span>
+										{:else}
+											<span class="position-data">Data: {position.data}</span>
+										{/if}
+									</div>
+									<button class="close-button" on:click={() => closePosition(position.pubkey)}>CLOSE</button>
+								</div>
+							{/each}
+						</div>
+					{/if}
 				</div>
 			{/if}
 		</div>
@@ -1406,6 +1467,57 @@
 		background: #ff9500;
 		color: #000;
 		transform: scale(1.05);
+	}
+
+	.position-section {
+		margin-bottom: 12px;
+	}
+
+	.section-label {
+		color: #666;
+		font-size: 9px;
+		font-weight: bold;
+		letter-spacing: 1px;
+		margin-bottom: 6px;
+		padding: 4px 0;
+		border-bottom: 1px solid #333;
+	}
+
+	.paper-position {
+		border-left: 3px solid #ff9500;
+	}
+
+	.onchain-position {
+		border-left: 3px solid #00ff00;
+	}
+
+	.position-direction.onchain {
+		background: #00ff00;
+		color: #000;
+		font-size: 8px;
+		padding: 2px 4px;
+	}
+
+	.position-address {
+		color: #00aaff;
+		font-family: 'Courier New', monospace;
+		font-size: 10px;
+	}
+
+	.position-data {
+		color: #666;
+		font-family: 'Courier New', monospace;
+		font-size: 9px;
+		word-break: break-all;
+		max-width: 150px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.position-current-price {
+		color: #00aaff;
+		font-size: 10px;
 	}
 
 	.leaderboard-stats {
