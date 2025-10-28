@@ -795,7 +795,7 @@
 		<div class="panel news-panel">
 			<div class="panel-header">
 				TOP NEWS - CRYPTO
-				{#if !newsLoading && news.length > 8}
+				{#if !newsLoading && news.length > 7}
 					<span class="news-toggle" on:click={() => showAllNews = !showAllNews}>
 						{showAllNews ? '▲ COLLAPSE' : '▼ SHOW ALL'}
 					</span>
@@ -807,7 +807,7 @@
 				{:else if news.length === 0}
 					<div class="error-state">Failed to load news. Check console for details.</div>
 				{:else}
-					{@const displayedNews = showAllNews ? news : news.slice(0, 8)}
+					{@const displayedNews = showAllNews ? news : news.slice(0, 7)}
 					{#each displayedNews as article, i}
 						<a href={article.url} target="_blank" rel="noopener noreferrer" class="news-item">
 							<div class="news-meta">
@@ -818,10 +818,17 @@
 							<div class="news-title">{article.title}</div>
 						</a>
 					{/each}
-					{#if !showAllNews && news.length > 8}
+					{#if !showAllNews && news.length > 7}
 						<div class="news-more">
 							<button class="show-more-btn" on:click={() => showAllNews = true}>
-								Show {news.length - 8} more articles ▼
+								Show {news.length - 7} more articles ▼
+							</button>
+						</div>
+					{/if}
+					{#if showAllNews && news.length > 7}
+						<div class="news-more">
+							<button class="show-more-btn" on:click={() => showAllNews = false}>
+								▲ Show less
 							</button>
 						</div>
 					{/if}
@@ -1556,8 +1563,8 @@
 	}
 
 	.news-panel {
-		min-height: calc(100vh - 180px);
-		height: auto;
+		height: calc(100vh - 20px);
+		max-height: calc(100vh - 20px);
 	}
 
 	.panel-header {
@@ -1577,7 +1584,8 @@
 		overflow-y: auto;
 		padding: 10px;
 		flex: 1;
-		min-height: calc(100vh - 240px);
+		height: 100%;
+		max-height: calc(100vh - 20px);
 	}
 
 	.loading-state,
