@@ -38,6 +38,14 @@
 	let positionSize = '100';
 	let takeProfit = '';
 	let stopLoss = '';
+	let selectedPercentage = 0;
+	let tradingMode = 'manual'; // 'manual' or 'percentage'
+	let availableBalance = { tokenIn: 0, tokenOut: 0 };
+	let activeTradingPanel = ''; // 'buy', 'sell', 'long', 'short', or ''
+	let buySize = '';
+	let sellSize = '';
+	let longSize = '';
+	let shortSize = '';
 	let activePositions: any[] = [];
 	let onChainPositions: any[] = [];
 	let totalPnL = 0;
@@ -76,6 +84,7 @@
 			magicBlockClient.setConnectedWallet(null);
 			walletBalance = 0;
 			accountsInitialized = {};
+			availableBalance = { tokenIn: 0, tokenOut: 0 };
 			magicBlockStatus = 'Ready - Connect wallet to trade';
 		}
 	});
@@ -105,6 +114,7 @@
 			accountsInitialized = await magicBlockClient.getAccountStatus();
 
 			mockTokenBalances = await magicBlockClient.getAllUserAccountData();
+			updateAvailableBalance();
 
 			await fetchOnChainPositions();
 
@@ -181,6 +191,7 @@
 			// Refresh mock token balances after initialization
 			setTimeout(async () => {
 				await updateWalletStatus();
+				updateAvailableBalance();
 			}, 3000);
 		} catch (error: any) {
 			console.error('Init error:', error);
@@ -294,11 +305,107 @@
 	async function switchTab(newTab: string) {
 		selectedTab = newTab;
 		
+		// Update available balance for the new pair
+		updateAvailableBalance();
+		
 		// Refresh account data for the new pair
 		if (connectedWallet?.connected) {
 			await updateWalletStatus();
 			await fetchOnChainPositions();
 		}
+	}
+
+	function updateAvailableBalance() {
+		if (!connectedWallet?.connected) {
+			availableBalance = { tokenIn: 0, tokenOut: 0 };
+			return;
+		}
+
+		const currentPairIndex = TRADING_PAIRS[selectedTab];
+		if (mockTokenBalances[currentPairIndex]) {
+			availableBalance = {
+				tokenIn: mockTokenBalances[currentPairIndex].tokenInBalance,
+				tokenOut: mockTokenBalances[currentPairIndex].tokenOutBalance
+			};
+		} else {
+			availableBalance = { tokenIn: 0, tokenOut: 0 };
+		}
+	}
+
+	function setPercentageSize(percentage: number, type: 'buy' | 'sell' | 'long' | 'short') {
+		selectedPercentage = percentage;
+		tradingMode = 'percentage';
+		
+		let calculatedSize = 0;
+		const currentPrice = prices[selectedTab].price;
+		
+		if (type === 'buy' || type === 'long') {
+			// For buying/long: use percentage of USDT balance
+			const usdtAmount = (availableBalance.tokenIn * percentage) / 100;
+			calculatedSize = usdtAmount; // Size in USDT
+		} else {
+			// For selling/short: use percentage of token balance converted to USDT
+			const tokenAmount = (availableBalance.tokenOut * percentage) / 100;
+			calculatedSize = tokenAmount * currentPrice; // Convert to USDT value
+		}
+		
+		const sizeValue = Math.max(0.01, calculatedSize).toFixed(2);
+		
+		// Update the appropriate size variable based on type
+		switch(type) {
+			case 'buy':
+				buySize = sizeValue;
+				break;
+			case 'sell':
+				sellSize = sizeValue;
+				break;
+			case 'long':
+				longSize = sizeValue;
+				break;
+			case 'short':
+				shortSize = sizeValue;
+				break;
+		}
+	}
+
+	function resetToManualMode() {
+		tradingMode = 'manual';
+		selectedPercentage = 0;
+	}
+
+	function openTradingPanel(panel: 'buy' | 'sell' | 'long' | 'short') {
+		activeTradingPanel = activeTradingPanel === panel ? '' : panel;
+		resetToManualMode();
+	}
+
+	function closeTradingPanel() {
+		activeTradingPanel = '';
+		resetToManualMode();
+	}
+
+	// Reactive variable for current size input
+	$: currentSize = activeTradingPanel === 'buy' ? buySize : 
+					activeTradingPanel === 'sell' ? sellSize : 
+					activeTradingPanel === 'long' ? longSize : 
+					activeTradingPanel === 'short' ? shortSize : '';
+
+	// Function to update the current size
+	function updateCurrentSize(value: string) {
+		switch(activeTradingPanel) {
+			case 'buy':
+				buySize = value;
+				break;
+			case 'sell':
+				sellSize = value;
+				break;
+			case 'long':
+				longSize = value;
+				break;
+			case 'short':
+				shortSize = value;
+				break;
+		}
+		resetToManualMode();
 	}
 
 	async function executeSpotTrade(action: 'BUY' | 'SELL') {
@@ -308,7 +415,8 @@
 		}
 
 		const currentPrice = prices[selectedTab].price;
-		const size = parseFloat(positionSize);
+		const sizeInput = action === 'BUY' ? buySize : sellSize;
+		const size = parseFloat(sizeInput);
 
 		if (size <= 0) {
 			return;
@@ -329,6 +437,7 @@
 
 				setTimeout(async () => {
 					await updateWalletStatus();
+					updateAvailableBalance();
 				}, 2000);
 			} catch (error: any) {
 				console.error('Trade error:', error);
@@ -337,7 +446,14 @@
 			}
 		}
 
-		positionSize = '100';
+		// Reset the appropriate size variable
+		if (action === 'BUY') {
+			buySize = '';
+		} else {
+			sellSize = '';
+		}
+		resetToManualMode();
+		closeTradingPanel();
 	}
 
 	async function openPosition(direction: 'LONG' | 'SHORT') {
@@ -346,7 +462,8 @@
 		}
 
 		const currentPrice = prices[selectedTab].price;
-		const size = parseFloat(positionSize);
+		const sizeInput = direction === 'LONG' ? longSize : shortSize;
+		const size = parseFloat(sizeInput);
 
 		if (!size || size <= 0) {
 			return;
@@ -371,6 +488,7 @@
 
 				setTimeout(async () => {
 					await updateWalletStatus();
+					updateAvailableBalance();
 				}, 2000);
 			} catch (error: any) {
 				console.error('Position error:', error);
@@ -392,9 +510,17 @@
 		};
 
 		activePositions = [...activePositions, position];
-		positionSize = '100';
+		
+		// Reset the appropriate size variable
+		if (direction === 'LONG') {
+			longSize = '';
+		} else {
+			shortSize = '';
+		}
 		takeProfit = '';
 		stopLoss = '';
+		resetToManualMode();
+		closeTradingPanel();
 	}
 
 	async function closePosition(id: number | string) {
@@ -492,6 +618,11 @@
 		setTimeout(async () => {
 			await fetchOnChainPositions();
 		}, 1000);
+	}
+
+	// Reactive statement to update available balance when tab or balances change
+	$: if (selectedTab && mockTokenBalances) {
+		updateAvailableBalance();
 	}
 
 	$: {
@@ -735,36 +866,217 @@
 			</div>
 
 			<div class="trading-panel-below">
-				<div class="trading-controls-overlay">
-					<div class="input-group-overlay">
-						<label>SIZE</label>
-						<input type="number" bind:value={positionSize} placeholder="100" />
+				<!-- Balance Display -->
+				<div class="balance-display">
+					<div class="balance-item">
+						<span class="balance-label">USDT:</span>
+						<span class="balance-value">{availableBalance.tokenIn.toFixed(2)}</span>
 					</div>
-					<div class="input-group-overlay">
-						<label>TP</label>
-						<input type="number" bind:value={takeProfit} placeholder="0" />
-					</div>
-					<div class="input-group-overlay">
-						<label>SL</label>
-						<input type="number" bind:value={stopLoss} placeholder="0" />
+					<div class="balance-item">
+						<span class="balance-label">{selectedTab}:</span>
+						<span class="balance-value">{availableBalance.tokenOut.toFixed(4)}</span>
 					</div>
 				</div>
-				<div class="trading-buttons-overlay">
-					<button class="buy-button-overlay" on:click={() => openPosition('LONG')}>
-						LONG
-					</button>
-					<button class="sell-button-overlay" on:click={() => openPosition('SHORT')}>
-						SHORT
-					</button>
+
+				<!-- Main Trading Sections -->
+				<div class="trading-sections">
+					<!-- BUY/LONG Section -->
+					<div class="trading-section buy-section">
+						<div class="section-header">
+							<div class="section-title">BUY / LONG</div>
+							<div class="section-price">@${prices[selectedTab].price.toFixed(2)}</div>
+						</div>
+						<div class="section-buttons">
+							<button 
+								class="action-btn buy-btn" 
+								class:active={activeTradingPanel === 'buy'}
+								on:click={() => openTradingPanel('buy')}
+								disabled={!connectedWallet?.connected}
+							>
+								<div class="btn-text">BUY SPOT</div>
+							</button>
+							<button 
+								class="action-btn long-btn" 
+								class:active={activeTradingPanel === 'long'}
+								on:click={() => openTradingPanel('long')}
+								disabled={!connectedWallet?.connected}
+							>
+								<div class="btn-text">LONG</div>
+							</button>
+						</div>
+					</div>
+
+					<!-- SELL/SHORT Section -->
+					<div class="trading-section sell-section">
+						<div class="section-header">
+							<div class="section-title">SELL / SHORT</div>
+							<div class="section-price">@${prices[selectedTab].price.toFixed(2)}</div>
+						</div>
+						<div class="section-buttons">
+							<button 
+								class="action-btn sell-btn" 
+								class:active={activeTradingPanel === 'sell'}
+								on:click={() => openTradingPanel('sell')}
+								disabled={!connectedWallet?.connected}
+							>
+								<div class="btn-text">SELL SPOT</div>
+							</button>
+							<button 
+								class="action-btn short-btn" 
+								class:active={activeTradingPanel === 'short'}
+								on:click={() => openTradingPanel('short')}
+								disabled={!connectedWallet?.connected}
+							>
+								<div class="btn-text">SHORT</div>
+							</button>
+						</div>
+					</div>
 				</div>
-				<div class="spot-trading-buttons-overlay">
-					<button class="spot-buy-button-overlay" on:click={() => executeSpotTrade('BUY')}>
-						BUY
-					</button>
-					<button class="spot-sell-button-overlay" on:click={() => executeSpotTrade('SELL')}>
-						SELL
-					</button>
-				</div>
+
+				<!-- Expandable Trading Controls -->
+				{#if activeTradingPanel}
+					<div class="trading-controls-panel" class:visible={activeTradingPanel}>
+						<div class="controls-header">
+							<div class="controls-title">
+								{activeTradingPanel.toUpperCase()} {selectedTab}/USDT
+							</div>
+							<button class="close-panel-btn" on:click={closeTradingPanel}>✕</button>
+						</div>
+
+
+						<!-- Trading Mode Toggle -->
+						<div class="trading-mode-toggle">
+							<button 
+								class="mode-toggle-btn" 
+								class:active={tradingMode === 'manual'}
+								on:click={resetToManualMode}
+							>
+								MANUAL
+							</button>
+							<button 
+								class="mode-toggle-btn" 
+								class:active={tradingMode === 'percentage'}
+								on:click={() => tradingMode = 'percentage'}
+							>
+								PERCENTAGE
+							</button>
+						</div>
+
+						<!-- Percentage Controls -->
+						{#if tradingMode === 'percentage'}
+							<div class="percentage-controls-advanced">
+								<div class="percentage-label">SELECT AMOUNT:</div>
+								<div class="percentage-buttons-grid">
+									<button 
+										class="percentage-btn-advanced" 
+										class:active={selectedPercentage === 25}
+										on:click={() => setPercentageSize(25, activeTradingPanel)}
+									>
+										25%
+									</button>
+									<button 
+										class="percentage-btn-advanced" 
+										class:active={selectedPercentage === 50}
+										on:click={() => setPercentageSize(50, activeTradingPanel)}
+									>
+										50%
+									</button>
+									<button 
+										class="percentage-btn-advanced" 
+										class:active={selectedPercentage === 75}
+										on:click={() => setPercentageSize(75, activeTradingPanel)}
+									>
+										75%
+									</button>
+									<button 
+										class="percentage-btn-advanced" 
+										class:active={selectedPercentage === 100}
+										on:click={() => setPercentageSize(100, activeTradingPanel)}
+									>
+										100%
+									</button>
+								</div>
+							</div>
+						{/if}
+
+						<!-- Input Controls -->
+						<div class="input-controls-grid">
+							<div class="input-control">
+								<label class="input-label">SIZE</label>
+								<input 
+									type="number" 
+									class="trading-input" 
+									value={currentSize}
+									on:input={(e) => updateCurrentSize(e.target.value)}
+									placeholder="0.00"
+								/>
+								<div class="input-suffix">USDT</div>
+							</div>
+							{#if activeTradingPanel === 'long' || activeTradingPanel === 'short'}
+								<div class="input-control">
+									<label class="input-label">TAKE PROFIT</label>
+									<input 
+										type="number" 
+										class="trading-input" 
+										bind:value={takeProfit}
+										placeholder="0.00"
+									/>
+									<div class="input-suffix">USDT</div>
+								</div>
+								<div class="input-control">
+									<label class="input-label">STOP LOSS</label>
+									<input 
+										type="number" 
+										class="trading-input" 
+										bind:value={stopLoss}
+										placeholder="0.00"
+									/>
+									<div class="input-suffix">USDT</div>
+								</div>
+							{/if}
+						</div>
+
+						<!-- Execute Button -->
+						<div class="execute-section">
+							<div class="trade-summary">
+								<div class="summary-row">
+									<span>Available:</span>
+									<span class="summary-value">
+										{activeTradingPanel === 'buy' || activeTradingPanel === 'long' 
+											? availableBalance.tokenIn.toFixed(2) + ' USDT'
+											: availableBalance.tokenOut.toFixed(4) + ' ' + selectedTab
+										}
+									</span>
+								</div>
+								{#if currentSize}
+									<div class="summary-row">
+										<span>Est. Cost:</span>
+										<span class="summary-value">
+											{(parseFloat(currentSize) || 0).toFixed(2)} USDT
+										</span>
+									</div>
+								{/if}
+							</div>
+							<button 
+								class="execute-btn"
+								class:buy-execute={activeTradingPanel === 'buy' || activeTradingPanel === 'long'}
+								class:sell-execute={activeTradingPanel === 'sell' || activeTradingPanel === 'short'}
+								on:click={() => {
+									if (activeTradingPanel === 'buy') executeSpotTrade('BUY');
+									else if (activeTradingPanel === 'sell') executeSpotTrade('SELL');
+									else if (activeTradingPanel === 'long') openPosition('LONG');
+									else if (activeTradingPanel === 'short') openPosition('SHORT');
+								}}
+								disabled={!connectedWallet?.connected || 
+									!currentSize ||
+									parseFloat(currentSize) <= 0
+								}
+							>
+								{activeTradingPanel.toUpperCase()} {selectedTab}
+							</button>
+						</div>
+					</div>
+				{/if}
 			</div>
 
 			{#if onChainPositions.length > 0}
@@ -1233,6 +1545,7 @@
 		flex: 1;
 		overflow: hidden;
 		min-height: 0;
+		align-items: start;
 	}
 
 	.panel {
@@ -1240,6 +1553,11 @@
 		display: flex;
 		flex-direction: column;
 		overflow: hidden;
+	}
+
+	.news-panel {
+		min-height: calc(100vh - 180px);
+		height: auto;
 	}
 
 	.panel-header {
@@ -1259,7 +1577,7 @@
 		overflow-y: auto;
 		padding: 10px;
 		flex: 1;
-		max-height: calc(100vh - 200px);
+		min-height: calc(100vh - 240px);
 	}
 
 	.loading-state,
@@ -1353,132 +1671,492 @@
 
 	.chart-container {
 		background: #0a0a0a;
-		height: 500px;
+		height: 400px;
 		width: 100%;
 	}
 
 	.trading-panel-below {
 		background: #000;
-		padding: 12px;
+		padding: 15px;
 		border-top: 1px solid #333;
 		display: flex;
+		flex-direction: column;
+		gap: 15px;
+		min-height: 200px;
+	}
+
+	/* Balance Display */
+	.balance-display {
+		display: flex;
+		gap: 20px;
+		padding: 8px 12px;
+		background: #0a0a0a;
+		border: 1px solid #333;
+		border-radius: 4px;
+	}
+
+	.balance-item {
+		display: flex;
 		align-items: center;
+		gap: 6px;
+		font-size: 11px;
+	}
+
+	.balance-label {
+		color: #666;
+		font-weight: bold;
+		letter-spacing: 0.5px;
+	}
+
+	.balance-value {
+		color: #ff9500;
+		font-family: 'Courier New', monospace;
+		font-weight: bold;
+		min-width: 80px;
+		text-align: right;
+	}
+
+	/* Trading Sections */
+	.trading-sections {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
 		gap: 15px;
 	}
 
-	.trading-controls-overlay {
-		display: flex;
-		gap: 10px;
-		align-items: flex-end;
+	.trading-section {
+		background: #0a0a0a;
+		border: 1px solid #333;
+		border-radius: 6px;
+		padding: 12px;
+		transition: all 0.3s ease;
 	}
 
-	.input-group-overlay {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
+	.trading-section:hover {
+		border-color: #666;
+		transform: translateY(-1px);
 	}
 
-	.input-group-overlay label {
+	.buy-section {
+		border-left: 3px solid #00ff00;
+	}
+
+	.sell-section {
+		border-left: 3px solid #ff4444;
+	}
+
+	.section-header {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		margin-bottom: 12px;
+		padding-bottom: 8px;
+		border-bottom: 1px solid #333;
+	}
+
+	.section-title {
 		color: #ff9500;
-		font-size: 10px;
+		font-size: 12px;
 		font-weight: bold;
 		letter-spacing: 1px;
 	}
 
-	.input-group-overlay input {
-		background: #000;
-		border: 1px solid #333;
+	.section-price {
 		color: #fff;
-		padding: 6px 8px;
 		font-family: 'Courier New', monospace;
-		font-size: 12px;
-		width: 70px;
-		outline: none;
+		font-size: 11px;
+		font-weight: bold;
 	}
 
-	.input-group-overlay input:focus {
+	.section-buttons {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+
+	.action-btn {
+		background: linear-gradient(145deg, #1a1a1a, #0a0a0a);
+		border: 1px solid #333;
+		color: #fff;
+		padding: 12px;
+		border-radius: 4px;
+		cursor: pointer;
+		transition: all 0.2s ease;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 8px;
+		font-family: 'Courier New', monospace;
+		font-weight: bold;
+		font-size: 11px;
+		letter-spacing: 1px;
+		position: relative;
+		overflow: hidden;
+	}
+
+	.action-btn:hover:not(:disabled) {
+		transform: translateY(-1px);
+		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+	}
+
+	.action-btn:disabled {
+		opacity: 0.4;
+		cursor: not-allowed;
+		transform: none !important;
+	}
+
+	.action-btn.active {
+		box-shadow: 0 0 15px rgba(255, 149, 0, 0.4);
 		border-color: #ff9500;
 	}
 
-	.trading-buttons-overlay {
-		display: flex;
-		gap: 10px;
-		margin-left: auto;
-	}
-
-	.buy-button-overlay,
-	.sell-button-overlay {
-		padding: 8px 24px;
-		font-family: 'Courier New', monospace;
-		font-size: 12px;
-		font-weight: bold;
-		border: 2px solid;
-		cursor: pointer;
-		transition: all 0.2s ease;
-		letter-spacing: 2px;
-	}
-
-	.buy-button-overlay {
-		background: #002200;
+	.buy-btn {
+		border-color: #00ff00;
 		color: #00ff00;
+	}
+
+	.buy-btn:hover:not(:disabled) {
+		background: linear-gradient(145deg, #00ff00, #00cc00);
+		color: #000;
 		border-color: #00ff00;
 	}
 
-	.buy-button-overlay:hover {
-		background: #00ff00;
+	.buy-btn.active {
+		background: rgba(0, 255, 0, 0.1);
+		box-shadow: 0 0 15px rgba(0, 255, 0, 0.4);
+		border-color: #00ff00;
+	}
+
+	.sell-btn {
+		border-color: #ff4444;
+		color: #ff4444;
+	}
+
+	.sell-btn:hover:not(:disabled) {
+		background: linear-gradient(145deg, #ff4444, #cc3333);
+		color: #fff;
+		border-color: #ff4444;
+	}
+
+	.sell-btn.active {
+		background: rgba(255, 68, 68, 0.1);
+		box-shadow: 0 0 15px rgba(255, 68, 68, 0.4);
+		border-color: #ff4444;
+	}
+
+	.long-btn {
+		border-color: #00ff00;
+		color: #00ff00;
+	}
+
+	.long-btn:hover:not(:disabled) {
+		background: linear-gradient(145deg, #00ff00, #00cc00);
 		color: #000;
+		border-color: #00ff00;
 	}
 
-	.sell-button-overlay {
-		background: #220000;
-		color: #ff0000;
-		border-color: #ff0000;
+	.long-btn.active {
+		background: rgba(0, 255, 0, 0.1);
+		box-shadow: 0 0 15px rgba(0, 255, 0, 0.4);
+		border-color: #00ff00;
 	}
 
-	.sell-button-overlay:hover {
-		background: #ff0000;
-		color: #000;
+	.short-btn {
+		border-color: #ff4444;
+		color: #ff4444;
 	}
 
-	.spot-trading-buttons-overlay {
+	.short-btn:hover:not(:disabled) {
+		background: linear-gradient(145deg, #ff4444, #cc3333);
+		color: #fff;
+		border-color: #ff4444;
+	}
+
+	.short-btn.active {
+		background: rgba(255, 68, 68, 0.1);
+		box-shadow: 0 0 15px rgba(255, 68, 68, 0.4);
+		border-color: #ff4444;
+	}
+
+	.btn-text {
+		font-size: 11px;
+		letter-spacing: 1px;
+		font-weight: bold;
+	}
+
+	/* Trading Controls Panel */
+	.trading-controls-panel {
+		background: #0a0a0a;
+		border: 1px solid #333;
+		border-radius: 6px;
+		padding: 15px;
+		margin-top: 10px;
+		animation: slideDown 0.3s ease;
+		overflow: hidden;
+	}
+
+	@keyframes slideDown {
+		from {
+			max-height: 0;
+			opacity: 0;
+			transform: translateY(-10px);
+		}
+		to {
+			max-height: 600px;
+			opacity: 1;
+			transform: translateY(0);
+		}
+	}
+
+	.controls-header {
 		display: flex;
-		gap: 10px;
-		margin-left: auto;
+		justify-content: space-between;
+		align-items: center;
+		margin-bottom: 15px;
+		padding-bottom: 10px;
+		border-bottom: 1px solid #333;
 	}
 
-	.spot-buy-button-overlay,
-	.spot-sell-button-overlay {
-		padding: 8px 24px;
+	.controls-title {
+		color: #ff9500;
+		font-size: 13px;
+		font-weight: bold;
+		letter-spacing: 1px;
+	}
+
+	.close-panel-btn {
+		background: #333;
+		border: none;
+		color: #fff;
+		width: 24px;
+		height: 24px;
+		border-radius: 50%;
+		cursor: pointer;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		font-size: 12px;
+		transition: all 0.2s ease;
+	}
+
+	.close-panel-btn:hover {
+		background: #ff4444;
+		transform: scale(1.1);
+	}
+
+
+	/* Trading Mode Toggle */
+	.trading-mode-toggle {
+		display: flex;
+		gap: 2px;
+		background: #1a1a1a;
+		border-radius: 4px;
+		padding: 2px;
+		margin-bottom: 15px;
+	}
+
+	.mode-toggle-btn {
+		flex: 1;
+		background: transparent;
+		border: none;
+		color: #666;
+		padding: 8px 16px;
+		font-family: 'Courier New', monospace;
+		font-size: 10px;
+		font-weight: bold;
+		cursor: pointer;
+		transition: all 0.2s ease;
+		border-radius: 2px;
+		letter-spacing: 1px;
+	}
+
+	.mode-toggle-btn.active {
+		background: #ff9500;
+		color: #000;
+	}
+
+	.mode-toggle-btn:hover:not(.active) {
+		background: #333;
+		color: #fff;
+	}
+
+	/* Advanced Percentage Controls */
+	.percentage-controls-advanced {
+		margin-bottom: 15px;
+		padding: 12px;
+		background: #1a1a1a;
+		border-radius: 4px;
+		border: 1px solid #333;
+	}
+
+	.percentage-label {
+		color: #ff9500;
+		font-size: 10px;
+		font-weight: bold;
+		letter-spacing: 1px;
+		margin-bottom: 8px;
+	}
+
+	.percentage-buttons-grid {
+		display: grid;
+		grid-template-columns: repeat(4, 1fr);
+		gap: 6px;
+	}
+
+	.percentage-btn-advanced {
+		background: #0a0a0a;
+		border: 1px solid #333;
+		color: #666;
+		padding: 8px;
+		border-radius: 3px;
+		cursor: pointer;
+		transition: all 0.2s ease;
+		font-family: 'Courier New', monospace;
+		font-size: 10px;
+		font-weight: bold;
+		letter-spacing: 0.5px;
+	}
+
+	.percentage-btn-advanced:hover {
+		background: #333;
+		color: #fff;
+		border-color: #666;
+		transform: translateY(-1px);
+	}
+
+	.percentage-btn-advanced.active {
+		background: #ff9500;
+		color: #000;
+		border-color: #ff9500;
+		box-shadow: 0 0 8px rgba(255, 149, 0, 0.4);
+	}
+
+	/* Input Controls */
+	.input-controls-grid {
+		display: grid;
+		grid-template-columns: repeat(2, 1fr);
+		gap: 12px;
+		margin-bottom: 15px;
+	}
+
+	.input-control {
+		position: relative;
+	}
+
+	.input-label {
+		display: block;
+		color: #ff9500;
+		font-size: 9px;
+		font-weight: bold;
+		letter-spacing: 1px;
+		margin-bottom: 5px;
+	}
+
+	.trading-input {
+		width: 100%;
+		background: #000;
+		border: 1px solid #333;
+		color: #fff;
+		padding: 10px 35px 10px 10px;
+		font-family: 'Courier New', monospace;
+		font-size: 12px;
+		border-radius: 3px;
+		transition: all 0.2s ease;
+		outline: none;
+	}
+
+	.trading-input:focus {
+		border-color: #ff9500;
+		box-shadow: 0 0 5px rgba(255, 149, 0, 0.3);
+	}
+
+	.input-suffix {
+		position: absolute;
+		right: 8px;
+		top: 50%;
+		transform: translateY(-50%);
+		color: #666;
+		font-size: 10px;
+		font-weight: bold;
+		pointer-events: none;
+		margin-top: 10px;
+	}
+
+	/* Execute Section */
+	.execute-section {
+		margin-top: 15px;
+	}
+
+	.trade-summary {
+		background: #1a1a1a;
+		border: 1px solid #333;
+		border-radius: 4px;
+		padding: 10px;
+		margin-bottom: 12px;
+	}
+
+	.summary-row {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		margin-bottom: 6px;
+		font-size: 10px;
+		color: #666;
+	}
+
+	.summary-row:last-child {
+		margin-bottom: 0;
+	}
+
+	.summary-value {
+		color: #fff;
+		font-family: 'Courier New', monospace;
+		font-weight: bold;
+	}
+
+	.execute-btn {
+		width: 100%;
+		padding: 12px;
+		border: none;
+		border-radius: 4px;
 		font-family: 'Courier New', monospace;
 		font-size: 12px;
 		font-weight: bold;
-		border: 2px solid;
+		letter-spacing: 1px;
 		cursor: pointer;
 		transition: all 0.2s ease;
-		letter-spacing: 2px;
+		text-transform: uppercase;
 	}
 
-	.spot-buy-button-overlay {
-		background: #001100;
-		color: #00cc00;
-		border-color: #00cc00;
+	.execute-btn:disabled {
+		opacity: 0.4;
+		cursor: not-allowed;
+		transform: none !important;
 	}
 
-	.spot-buy-button-overlay:hover {
-		background: #00cc00;
+	.execute-btn.buy-execute {
+		background: linear-gradient(145deg, #00ff00, #00cc00);
 		color: #000;
+		border: 2px solid #00ff00;
 	}
 
-	.spot-sell-button-overlay {
-		background: #110000;
-		color: #cc0000;
-		border-color: #cc0000;
+	.execute-btn.buy-execute:hover:not(:disabled) {
+		background: linear-gradient(145deg, #00cc00, #009900);
+		transform: translateY(-2px);
+		box-shadow: 0 4px 15px rgba(0, 255, 0, 0.4);
 	}
 
-	.spot-sell-button-overlay:hover {
-		background: #cc0000;
-		color: #000;
+	.execute-btn.sell-execute {
+		background: linear-gradient(145deg, #ff4444, #cc3333);
+		color: #fff;
+		border: 2px solid #ff4444;
 	}
+
+	.execute-btn.sell-execute:hover:not(:disabled) {
+		background: linear-gradient(145deg, #cc3333, #990000);
+		transform: translateY(-2px);
+		box-shadow: 0 4px 15px rgba(255, 68, 68, 0.4);
+	}
+
 
 	.chart-title {
 		color: #ff9500;
@@ -1664,23 +2342,6 @@
 		transform: scale(1.05);
 	}
 
-	.position-section {
-		margin-bottom: 12px;
-	}
-
-	.section-label {
-		color: #666;
-		font-size: 9px;
-		font-weight: bold;
-		letter-spacing: 1px;
-		margin-bottom: 6px;
-		padding: 4px 0;
-		border-bottom: 1px solid #333;
-	}
-
-	.paper-position {
-		border-left: 3px solid #ff9500;
-	}
 
 	.onchain-position {
 		border-left: 3px solid #00ff00;
@@ -1920,9 +2581,6 @@
 		font-weight: bold;
 	}
 
-	.positions-count .token-amount {
-		color: #00ff00;
-	}
 
 	.pnl-balance {
 		border-top: 1px solid #333;
