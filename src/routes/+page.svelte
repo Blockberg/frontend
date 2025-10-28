@@ -463,15 +463,18 @@
 
 		try {
 			magicBlockStatus = 'Requesting airdrop...';
-			const signature = await magicBlockClient.connection.requestAirdrop(
+			const { Connection } = await import('@solana/web3.js');
+			const solanaConnection = new Connection('https://api.devnet.solana.com', 'confirmed');
+			const signature = await solanaConnection.requestAirdrop(
 				connectedWallet.publicKey,
-				1000000000
+				2000000000
 			);
+			await solanaConnection.confirmTransaction(signature, 'confirmed');
 			magicBlockStatus = 'Airdrop sent';
 
 			const pollInterval = setInterval(async () => {
 				await updateWalletStatus();
-				if (walletBalance > 0.5) {
+				if (walletBalance > 1) {
 					magicBlockStatus = `Funded: ${walletBalance.toFixed(2)} SOL`;
 					clearInterval(pollInterval);
 				}
@@ -479,6 +482,7 @@
 
 			setTimeout(() => clearInterval(pollInterval), 60000);
 		} catch (error: any) {
+			console.error('Airdrop error:', error);
 			magicBlockStatus = 'Airdrop failed';
 		}
 	}
