@@ -103,17 +103,16 @@
 		try {
 			walletBalance = await magicBlockClient.getBalance();
 			accountsInitialized = await magicBlockClient.getAccountStatus();
-			
-			// Fetch mock token balances for all initialized accounts
+
 			mockTokenBalances = await magicBlockClient.getAllUserAccountData();
-			
-			// Fetch on-chain positions
+
 			await fetchOnChainPositions();
-			
-			// Update status based on account initialization
+
+			await updateLeaderboardAndStats();
+
 			const totalPairs = Object.keys(TRADING_PAIRS).length;
 			const initializedPairs = Object.values(accountsInitialized).filter(Boolean).length;
-			
+
 			if (initializedPairs === 0) {
 				magicBlockStatus = 'Connected - Initialize accounts to trade';
 			} else if (initializedPairs === totalPairs) {
@@ -123,6 +122,36 @@
 			}
 		} catch (error) {
 			magicBlockStatus = 'Connected - Status check failed';
+		}
+	}
+
+	async function updateLeaderboardAndStats() {
+		try {
+			const currentPrices: Record<string, number> = {};
+			for (const [symbol, priceData] of Object.entries(prices)) {
+				currentPrices[symbol] = priceData.price;
+			}
+
+			leaderboardData = await magicBlockClient.fetchLeaderboard(currentPrices);
+
+			if (connectedWallet?.connected) {
+				let userTotalValue = 0;
+				let userTotalPositions = 0;
+
+				for (const [pairIndex, balances] of Object.entries(mockTokenBalances)) {
+					const pairSymbols = ['SOL', 'BTC', 'ETH', 'AVAX', 'LINK'];
+					const pairSymbol = pairSymbols[Number(pairIndex)];
+					const currentPrice = prices[pairSymbol]?.price || 0;
+
+					const pairValue = balances.tokenInBalance + (balances.tokenOutBalance * currentPrice);
+					userTotalValue += pairValue;
+					userTotalPositions += balances.totalPositions;
+				}
+
+				totalPnL = userTotalValue - 10000;
+				totalTrades = userTotalPositions;
+			}
+		} catch (error) {
 		}
 	}
 
@@ -806,7 +835,9 @@
 				{@const currentPairIndex = TRADING_PAIRS[selectedTab]}
 				<div class="token-balances">
 					{#if mockTokenBalances[currentPairIndex]}
-						{@const pnl = mockTokenBalances[currentPairIndex].tokenInBalance - 10000}
+						{@const currentPrice = prices[selectedTab]?.price || 0}
+					{@const totalValue = mockTokenBalances[currentPairIndex].tokenInBalance + (mockTokenBalances[currentPairIndex].tokenOutBalance * currentPrice)}
+					{@const pnl = totalValue - 10000}
 						<div class="balance-row">
 							<div class="pair-info">
 								<span class="pair-name">{selectedTab}/USDT</span>

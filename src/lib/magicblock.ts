@@ -1336,46 +1336,71 @@ export class MagicBlockClient {
 		}
 	}
 
-	async fetchLeaderboard(): Promise<any[]> {
-		if (!this.competitionEntity) {
-			return [];
-		}
-
+	async fetchLeaderboard(currentPrices?: Record<string, number>): Promise<any[]> {
 		try {
-			
-			const tradingAccountAccounts = await this.connection.getProgramAccounts(COMPONENT_IDS.TRADING_ACCOUNT, {
+			const userAccountSize = 66;
+
+			const allAccounts = await this.connection.getProgramAccounts(PAPER_TRADING_PROGRAM_ID, {
 				filters: [
 					{
-						memcmp: {
-							offset: 8, // Skip discriminator
-							bytes: this.competitionEntity.toBase58() // Filter by competition entity
-						}
+						dataSize: userAccountSize
 					}
 				]
 			});
 
-			const leaderboard = [];
-			for (const accountInfo of tradingAccountAccounts) {
+			const userMap = new Map<string, { totalValue: number; totalPositions: number }>();
+
+			for (const accountInfo of allAccounts) {
 				try {
-					// Parse trading account data
-					// This would need to match the TradingAccount component structure
-					// const data = accountInfo.account.data;
-					// TODO: Add parsing logic based on the actual TradingAccount structure
-					
-					leaderboard.push({
-						address: accountInfo.pubkey.toBase58(),
-						pnl: 0, // Parse from actual data structure
-						trades: 0, // Parse from actual data structure  
-						balance: 10000, // Parse from actual data structure
-					});
+					const data = accountInfo.account.data;
+					let offset = 8;
+
+					const ownerBytes = data.slice(offset, offset + 32);
+					const owner = new PublicKey(ownerBytes).toBase58();
+					offset += 32;
+
+					const pairIndex = data[offset];
+					offset += 1;
+
+					const tokenInBalance = Number(data.readBigUInt64LE(offset)) / 1e6;
+					offset += 8;
+
+					const tokenOutBalance = Number(data.readBigUInt64LE(offset)) / 1e9;
+					offset += 8;
+
+					const totalPositions = Number(data.readBigUInt64LE(offset));
+
+					const pairSymbols = ['SOL', 'BTC', 'ETH', 'AVAX', 'LINK'];
+					const pairSymbol = pairSymbols[pairIndex];
+					const currentPrice = currentPrices?.[pairSymbol] || 0;
+
+					const pairValue = tokenInBalance + (tokenOutBalance * currentPrice);
+
+					if (!userMap.has(owner)) {
+						userMap.set(owner, { totalValue: 0, totalPositions: 0 });
+					}
+
+					const userData = userMap.get(owner)!;
+					userData.totalValue += pairValue;
+					userData.totalPositions += totalPositions;
 				} catch (parseError) {
 				}
 			}
 
-			// Sort by PnL descending
+			const leaderboard = [];
+			for (const [address, data] of userMap.entries()) {
+				const pnl = data.totalValue - 10000;
+
+				leaderboard.push({
+					address: address.substring(0, 8),
+					pnl,
+					trades: data.totalPositions,
+					balance: data.totalValue
+				});
+			}
+
 			leaderboard.sort((a, b) => b.pnl - a.pnl);
-			
-			// Add ranks
+
 			return leaderboard.map((entry, index) => ({
 				...entry,
 				rank: index + 1
