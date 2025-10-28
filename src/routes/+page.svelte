@@ -160,7 +160,7 @@
 			return;
 		}
 
-		if (walletBalance < 0.5) {
+		if (walletBalance < 0.6) {
 			magicBlockStatus = 'Insufficient SOL. Click AIRDROP first.';
 			return;
 		}

@@ -126,7 +126,7 @@ export class MagicBlockClient {
 	}
 
 	// Initialize trading account for a user - MagicBlock ephemeral rollup approach
-	async initializeAccount(pairIndex: number, entryFee: number = 0.5, initialTokenIn: number = 10000): Promise<string> {
+	async initializeAccount(pairIndex: number, entryFee: number = 0.1, initialTokenIn: number = 10000): Promise<string> {
 		const currentWallet = this.getCurrentWallet();
 		if (!currentWallet) {
 			throw new Error('Wallet not connected');
@@ -135,7 +135,7 @@ export class MagicBlockClient {
 		try {
 			const solanaConnection = new Connection(SOLANA_RPC, 'confirmed');
 			const balance = await solanaConnection.getBalance(currentWallet.publicKey);
-			if (balance < 500000000) {
+			if (balance < 100000000) {
 				throw new Error('Insufficient SOL balance');
 			}
 
