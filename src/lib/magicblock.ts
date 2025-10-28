@@ -133,9 +133,9 @@ export class MagicBlockClient {
 		}
 
 		try {
-			// Check wallet balance first
-			const balance = await this.connection.getBalance(currentWallet.publicKey);
-			if (balance < 500000000) { // 0.5 SOL minimum
+			const solanaConnection = new Connection(SOLANA_RPC, 'confirmed');
+			const balance = await solanaConnection.getBalance(currentWallet.publicKey);
+			if (balance < 500000000) {
 				throw new Error('Insufficient SOL balance');
 			}
 
@@ -1194,8 +1194,14 @@ export class MagicBlockClient {
 			return 0;
 		}
 
-		const balance = await this.connection.getBalance(currentWallet.publicKey);
-		return balance / LAMPORTS_PER_SOL;
+		try {
+			const solanaConnection = new Connection(SOLANA_RPC, 'confirmed');
+			const balance = await solanaConnection.getBalance(currentWallet.publicKey);
+			return balance / LAMPORTS_PER_SOL;
+		} catch (error) {
+			const balance = await this.connection.getBalance(currentWallet.publicKey);
+			return balance / LAMPORTS_PER_SOL;
+		}
 	}
 
 	// Get mock token balances for a specific trading pair
