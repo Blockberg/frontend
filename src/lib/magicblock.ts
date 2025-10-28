@@ -1148,7 +1148,7 @@ export class MagicBlockClient {
 					const pairSymbols = ['SOL', 'BTC', 'ETH', 'AVAX', 'LINK'];
 					const pairSymbol = pairSymbols[pairIndex] || 'UNKNOWN';
 
-					if (status === 0) { // Only show active positions
+					if (status === 0) {
 						positions.push({
 							type: 'direct',
 							pubkey: accountInfo.pubkey.toBase58(),
@@ -1156,7 +1156,7 @@ export class MagicBlockClient {
 							direction: positionType === 0 ? 'LONG' : 'SHORT',
 							pairIndex,
 							pairSymbol,
-							amountTokenOut: Number(amountTokenOut) / 1e9,
+							amountTokenOut: Number(amountTokenOut) / 1e6,
 							entryPrice: Number(entryPrice) / 1e6,
 							takeProfitPrice: takeProfitPrice > 0 ? Number(takeProfitPrice) / 1e6 : null,
 							stopLossPrice: stopLossPrice > 0 ? Number(stopLossPrice) / 1e6 : null,
