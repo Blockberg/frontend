@@ -154,6 +154,7 @@
 				await updateWalletStatus();
 			}, 3000);
 		} catch (error: any) {
+			console.error('Init error:', error);
 			magicBlockStatus = 'Initialization failed';
 		}
 	}
@@ -301,6 +302,7 @@
 					await updateWalletStatus();
 				}, 2000);
 			} catch (error: any) {
+				console.error('Trade error:', error);
 				magicBlockStatus = `${action} failed`;
 				return;
 			}
@@ -342,6 +344,7 @@
 					await updateWalletStatus();
 				}, 2000);
 			} catch (error: any) {
+				console.error('Position error:', error);
 				magicBlockStatus = 'Open failed';
 				return;
 			}

@@ -126,7 +126,7 @@ export class MagicBlockClient {
 	}
 
 	// Initialize trading account for a user - MagicBlock ephemeral rollup approach
-	async initializeAccount(pairIndex: number, entryFee: number = 0.1, initialTokenIn: number = 10000): Promise<string> {
+	async initializeAccount(pairIndex: number, entryFee: number = 0.5, initialTokenIn: number = 10000): Promise<string> {
 		const currentWallet = this.getCurrentWallet();
 		if (!currentWallet) {
 			throw new Error('Wallet not connected');
@@ -485,10 +485,8 @@ export class MagicBlockClient {
 	): Promise<string> {
 		
 		// Instead of using Bolt systems, let's execute the paper trading program directly
-		// through the MagicBlock rollup, using the same logic as the direct contract
-		
 		const priceScaled = Math.floor(currentPrice * 1e6);
-		const amountTokenOut = Math.floor((size / currentPrice) * 1e9);
+		const amountTokenOut = Math.floor((size / currentPrice) * 1e6);
 		const requiredTokenIn = Math.floor(size * 1e6);
 		const takeProfitScaled = takeProfit ? Math.floor(takeProfit * 1e6) : 0;
 		const stopLossScaled = stopLoss ? Math.floor(stopLoss * 1e6) : 0;
@@ -634,7 +632,7 @@ export class MagicBlockClient {
 		}
 
 		const priceScaled = Math.floor(currentPrice * 1e6);
-		const amountTokenOut = Math.floor((size / currentPrice) * 1e9);
+		const amountTokenOut = Math.floor((size / currentPrice) * 1e6);
 		const requiredTokenIn = Math.floor(size * 1e6);
 		const takeProfitScaled = takeProfit ? Math.floor(takeProfit * 1e6) : 0;
 		const stopLossScaled = stopLoss ? Math.floor(stopLoss * 1e6) : 0;
@@ -860,7 +858,7 @@ export class MagicBlockClient {
 			throw new Error(`Trading account not initialized for pair ${pairIndex}. Please initialize first.`);
 		}
 
-		const amountTokenOut = Math.floor((sizeInUSDT / currentPrice) * 1e9);
+		const amountTokenOut = Math.floor((sizeInUSDT / currentPrice) * 1e6);
 		const priceScaled = Math.floor(currentPrice * 1e6);
 
 		// Check balance before executing trade
