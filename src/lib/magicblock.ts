@@ -6,7 +6,7 @@ export const MAGICBLOCK_RPC = 'https://rpc.magicblock.app/devnet/';
 export const SOLANA_RPC = 'https://api.devnet.solana.com';
 
 // Paper Trading Program ID from the contract
-export const PAPER_TRADING_PROGRAM_ID = new PublicKey('b6NjCktqaB4KqTvsNmYTJ9KBfwMJ7Sh4hMJ2Xz26YR3');
+export const PAPER_TRADING_PROGRAM_ID = new PublicKey('ENpbjfPxXx9fLhLDcqbLsHmo25LRU4fW9RXFfrqbKbmo');
 
 export const COMPONENT_IDS = {
 	TRADING_ACCOUNT: new PublicKey('3PDo9AKeLhU6hcUC7gft3PKQuotH4624mcevqdSiyTPS'),
@@ -28,6 +28,25 @@ export const TRADING_PAIRS = {
 	ETH: 2,
 	AVAX: 3,
 	LINK: 4,
+};
+
+export const TOKEN_DECIMALS = {
+	// token_in (quote tokens - typically USDT)
+	USDT: 6,
+	// token_out (base tokens)
+	SOL: 9,
+	BTC: 8,
+	ETH: 18,
+	AVAX: 18,
+	LINK: 18,
+};
+
+export const PAIR_DECIMALS = {
+	0: { tokenIn: TOKEN_DECIMALS.USDT, tokenOut: TOKEN_DECIMALS.SOL },   // SOL/USDT
+	1: { tokenIn: TOKEN_DECIMALS.USDT, tokenOut: TOKEN_DECIMALS.BTC },   // BTC/USDT
+	2: { tokenIn: TOKEN_DECIMALS.USDT, tokenOut: TOKEN_DECIMALS.ETH },   // ETH/USDT
+	3: { tokenIn: TOKEN_DECIMALS.USDT, tokenOut: TOKEN_DECIMALS.AVAX },  // AVAX/USDT
+	4: { tokenIn: TOKEN_DECIMALS.USDT, tokenOut: TOKEN_DECIMALS.LINK },  // LINK/USDT
 };
 
 export enum PositionDirection {
@@ -155,7 +174,8 @@ export class MagicBlockClient {
 			const treasuryPubkey = new PublicKey(configAccountInfo.data.subarray(40, 72));
 
 			const entryFeeScaled = Math.floor(entryFee * LAMPORTS_PER_SOL);
-			const initialTokenInScaled = Math.floor(initialTokenIn * 1e6);
+			const pairDecimals = PAIR_DECIMALS[pairIndex as keyof typeof PAIR_DECIMALS];
+			const initialTokenInScaled = Math.floor(initialTokenIn * Math.pow(10, pairDecimals.tokenIn));
 
 			// Setup for potential Anchor usage (keeping for future use)
 
@@ -165,12 +185,14 @@ export class MagicBlockClient {
 			const discriminator = new Uint8Array(hash).slice(0, 8);
 			
 			
-			// Create instruction data buffer
-			const instructionData = Buffer.alloc(25);
+			// Create instruction data buffer (discriminator + pair_index + entry_fee + initial_token_in + token_in_decimals + token_out_decimals)
+			const instructionData = Buffer.alloc(27);
 			Buffer.from(discriminator).copy(instructionData, 0);
 			instructionData.writeUInt8(pairIndex, 8);
 			instructionData.writeBigUInt64LE(BigInt(entryFeeScaled), 9);
 			instructionData.writeBigUInt64LE(BigInt(initialTokenInScaled), 17);
+			instructionData.writeUInt8(pairDecimals.tokenIn, 25);
+			instructionData.writeUInt8(pairDecimals.tokenOut, 26);
 
 			const instruction = new TransactionInstruction({
 				keys: [
@@ -484,10 +506,13 @@ export class MagicBlockClient {
 		stopLoss?: number
 	): Promise<string> {
 		
+		// Get decimal configuration for this pair
+		const pairDecimals = PAIR_DECIMALS[pairIndex as keyof typeof PAIR_DECIMALS];
+		
 		// Instead of using Bolt systems, let's execute the paper trading program directly
-		const priceScaled = Math.floor(currentPrice * 1e6);
-		const amountTokenOut = Math.floor((size / currentPrice) * 1e6);
-		const requiredTokenIn = Math.floor(size * 1e6);
+		const priceScaled = Math.floor(currentPrice * 1e6); // Price always has 6 decimals
+		const amountTokenOut = Math.floor((size / currentPrice) * Math.pow(10, pairDecimals.tokenOut));
+		const requiredTokenIn = Math.floor(size * Math.pow(10, pairDecimals.tokenIn));
 		const takeProfitScaled = takeProfit ? Math.floor(takeProfit * 1e6) : 0;
 		const stopLossScaled = stopLoss ? Math.floor(stopLoss * 1e6) : 0;
 
@@ -497,7 +522,7 @@ export class MagicBlockClient {
 			throw new Error(`Trading account not found for pair ${pairIndex}. Please initialize first.`);
 		}
 
-		const requiredBalance = requiredTokenIn / 1e6; // Convert back to readable format for comparison
+		const requiredBalance = requiredTokenIn / Math.pow(10, pairDecimals.tokenIn); // Convert back to readable format for comparison
 		const epsilon = 0.01; // Allow 0.01 USDT tolerance for floating point precision
 
 		if (accountData.tokenInBalance < requiredBalance - epsilon) {
@@ -631,9 +656,12 @@ export class MagicBlockClient {
 			throw new Error(`Trading account not initialized for pair ${pairIndex}. Please initialize first.`);
 		}
 
-		const priceScaled = Math.floor(currentPrice * 1e6);
-		const amountTokenOut = Math.floor((size / currentPrice) * 1e6);
-		const requiredTokenIn = Math.floor(size * 1e6);
+		// Get decimal configuration for this pair
+		const pairDecimals = PAIR_DECIMALS[pairIndex as keyof typeof PAIR_DECIMALS];
+		
+		const priceScaled = Math.floor(currentPrice * 1e6); // Price always has 6 decimals
+		const amountTokenOut = Math.floor((size / currentPrice) * Math.pow(10, pairDecimals.tokenOut));
+		const requiredTokenIn = Math.floor(size * Math.pow(10, pairDecimals.tokenIn));
 		const takeProfitScaled = takeProfit ? Math.floor(takeProfit * 1e6) : 0;
 		const stopLossScaled = stopLoss ? Math.floor(stopLoss * 1e6) : 0;
 
@@ -644,7 +672,7 @@ export class MagicBlockClient {
 			throw new Error(`Trading account not found for pair ${pairIndex}. Please initialize first.`);
 		}
 
-		const requiredBalance = requiredTokenIn / 1e6; // Convert back to readable format
+		const requiredBalance = requiredTokenIn / Math.pow(10, pairDecimals.tokenIn); // Convert back to readable format
 
 		if (accountData.tokenInBalance < requiredBalance) {
 			throw new Error(`Insufficient balance. Required: ${requiredBalance.toFixed(2)} USDT, Available: ${accountData.tokenInBalance.toFixed(2)} USDT`);
@@ -839,7 +867,7 @@ export class MagicBlockClient {
 		pairSymbol: string,
 		action: 'BUY' | 'SELL',
 		currentPrice: number,
-		sizeInUSDT: number
+		tokenAmount: number
 	): Promise<string> {
 		const currentWallet = this.getCurrentWallet();
 		if (!currentWallet) {
@@ -858,8 +886,12 @@ export class MagicBlockClient {
 			throw new Error(`Trading account not initialized for pair ${pairIndex}. Please initialize first.`);
 		}
 
-		const amountTokenOut = Math.floor((sizeInUSDT / currentPrice) * 1e6);
-		const priceScaled = Math.floor(currentPrice * 1e6);
+		// Get decimal configuration for this pair
+		const pairDecimals = PAIR_DECIMALS[pairIndex as keyof typeof PAIR_DECIMALS];
+		
+		// Contract expects amount_token_out in proper token decimals
+		const amountTokenOut = Math.floor(tokenAmount * Math.pow(10, pairDecimals.tokenOut));
+		const priceScaled = Math.floor(currentPrice * 1e6); // Price always has 6 decimals
 
 		// Check balance before executing trade
 		const accountData = await this.getUserAccountData(pairIndex);
@@ -867,18 +899,18 @@ export class MagicBlockClient {
 			throw new Error(`Trading account not found for pair ${pairIndex}. Please initialize first.`);
 		}
 
-		const requiredTokenAmount = amountTokenOut / 1e9;
-		const availableTokenAmount = accountData.tokenOutBalance;
-
 		if (action === 'BUY') {
-			const requiredUSDT = sizeInUSDT;
+			// For buying, check if we have enough USDT
+			const requiredUSDT = tokenAmount * currentPrice;
 			const availableUSDT = accountData.tokenInBalance;
 			if (availableUSDT < requiredUSDT) {
-				throw new Error(`Insufficient USDT balance. Required: ${requiredUSDT}, Available: ${availableUSDT.toFixed(2)}`);
+				throw new Error(`Insufficient USDT balance. Required: ${requiredUSDT.toFixed(2)}, Available: ${availableUSDT.toFixed(2)}`);
 			}
 		} else {
-			if (availableTokenAmount < requiredTokenAmount) {
-				throw new Error(`Insufficient token balance. Required: ${requiredTokenAmount.toFixed(6)}, Available: ${availableTokenAmount.toFixed(6)}`);
+			// For selling, check if we have enough tokens
+			const availableTokenAmount = accountData.tokenOutBalance;
+			if (availableTokenAmount < tokenAmount) {
+				throw new Error(`Insufficient token balance. Required: ${tokenAmount.toFixed(6)}, Available: ${availableTokenAmount.toFixed(6)}`);
 			}
 		}
 
@@ -1144,11 +1176,12 @@ export class MagicBlockClient {
 					// closed_at: i64 (8 bytes)
 					const closedAt = dataView.getBigInt64(offset, true);
 
-					// Get pair symbol
+					// Get pair symbol and decimals
 					const pairSymbols = ['SOL', 'BTC', 'ETH', 'AVAX', 'LINK'];
 					const pairSymbol = pairSymbols[pairIndex] || 'UNKNOWN';
+					const pairDecimals = PAIR_DECIMALS[pairIndex as keyof typeof PAIR_DECIMALS];
 
-					if (status === 0) {
+					if (status === 0 && pairDecimals) {
 						positions.push({
 							type: 'direct',
 							pubkey: accountInfo.pubkey.toBase58(),
@@ -1156,8 +1189,8 @@ export class MagicBlockClient {
 							direction: positionType === 0 ? 'LONG' : 'SHORT',
 							pairIndex,
 							pairSymbol,
-							amountTokenOut: Number(amountTokenOut) / 1e6,
-							entryPrice: Number(entryPrice) / 1e6,
+							amountTokenOut: Number(amountTokenOut) / Math.pow(10, pairDecimals.tokenOut),
+							entryPrice: Number(entryPrice) / 1e6, // Price always has 6 decimals
 							takeProfitPrice: takeProfitPrice > 0 ? Number(takeProfitPrice) / 1e6 : null,
 							stopLossPrice: stopLossPrice > 0 ? Number(stopLossPrice) / 1e6 : null,
 							openedAt: new Date(Number(openedAt) * 1000),
@@ -1239,12 +1272,20 @@ export class MagicBlockClient {
 			const tokenOutBalanceRaw = data.readBigUInt64LE(offset);
 			offset += 8;
 			
+			// Read token_in_decimals (1 byte, u8)
+			const tokenInDecimals = data[offset];
+			offset += 1;
+			
+			// Read token_out_decimals (1 byte, u8)
+			const tokenOutDecimals = data[offset];
+			offset += 1;
+			
 			// Read total_positions (8 bytes, u64)
 			const totalPositions = Number(data.readBigUInt64LE(offset));
 
-			// Convert to readable format (token_in has 6 decimals, token_out has 9 decimals)
-			const tokenInBalance = Number(tokenInBalanceRaw) / 1e6;  // USDT-like token
-			const tokenOutBalance = Number(tokenOutBalanceRaw) / 1e9;  // SOL/BTC/ETH-like token
+			// Convert to readable format using stored decimals
+			const tokenInBalance = Number(tokenInBalanceRaw) / Math.pow(10, tokenInDecimals);
+			const tokenOutBalance = Number(tokenOutBalanceRaw) / Math.pow(10, tokenOutDecimals);
 
 			return {
 				tokenInBalance,
@@ -1344,7 +1385,7 @@ export class MagicBlockClient {
 
 	async fetchLeaderboard(currentPrices?: Record<string, number>): Promise<any[]> {
 		try {
-			const userAccountSize = 66;
+			const userAccountSize = 68; // Updated size with decimal fields
 
 			const allAccounts = await this.connection.getProgramAccounts(PAPER_TRADING_PROGRAM_ID, {
 				filters: [
@@ -1368,13 +1409,22 @@ export class MagicBlockClient {
 					const pairIndex = data[offset];
 					offset += 1;
 
-					const tokenInBalance = Number(data.readBigUInt64LE(offset)) / 1e6;
+					const tokenInBalanceRaw = data.readBigUInt64LE(offset);
 					offset += 8;
 
-					const tokenOutBalance = Number(data.readBigUInt64LE(offset)) / 1e9;
+					const tokenOutBalanceRaw = data.readBigUInt64LE(offset);
 					offset += 8;
+
+					const tokenInDecimals = data[offset];
+					offset += 1;
+
+					const tokenOutDecimals = data[offset];
+					offset += 1;
 
 					const totalPositions = Number(data.readBigUInt64LE(offset));
+
+					const tokenInBalance = Number(tokenInBalanceRaw) / Math.pow(10, tokenInDecimals);
+					const tokenOutBalance = Number(tokenOutBalanceRaw) / Math.pow(10, tokenOutDecimals);
 
 					const pairSymbols = ['SOL', 'BTC', 'ETH', 'AVAX', 'LINK'];
 					const pairSymbol = pairSymbols[pairIndex];

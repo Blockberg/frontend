@@ -130,7 +130,12 @@
 			} else {
 				magicBlockStatus = `Connected - ${initializedPairs}/${totalPairs} pairs initialized`;
 			}
+
+			// Force reactivity update
+			mockTokenBalances = mockTokenBalances;
+			availableBalance = availableBalance;
 		} catch (error) {
+			console.error('Wallet status update error:', error);
 			magicBlockStatus = 'Connected - Status check failed';
 		}
 	}
@@ -339,17 +344,23 @@
 		let calculatedSize = 0;
 		const currentPrice = prices[selectedTab].price;
 		
-		if (type === 'buy' || type === 'long') {
-			// For buying/long: use percentage of USDT balance
-			const usdtAmount = (availableBalance.tokenIn * percentage) / 100;
-			calculatedSize = usdtAmount; // Size in USDT
-		} else {
-			// For selling/short: use percentage of token balance converted to USDT
-			const tokenAmount = (availableBalance.tokenOut * percentage) / 100;
-			calculatedSize = tokenAmount * currentPrice; // Convert to USDT value
+		// Don't calculate if price is not loaded yet
+		if (!currentPrice || currentPrice <= 0) {
+			return;
 		}
 		
-		const sizeValue = Math.max(0.01, calculatedSize).toFixed(2);
+		if (type === 'buy' || type === 'long') {
+			// For buying/long: use percentage of USDT balance and convert to token amount
+			const usdtAmount = (availableBalance.tokenIn * percentage) / 100;
+			calculatedSize = usdtAmount / currentPrice; // Convert USDT to token amount
+		} else {
+			// For selling/short: use percentage of token balance
+			calculatedSize = (availableBalance.tokenOut * percentage) / 100;
+		}
+		
+		// Use appropriate decimal places based on token
+		const decimals = selectedTab === 'BTC' ? 6 : selectedTab === 'SOL' ? 4 : 6;
+		const sizeValue = Math.max(0.0001, calculatedSize).toFixed(decimals);
 		
 		// Update the appropriate size variable based on type
 		switch(type) {
@@ -416,9 +427,10 @@
 
 		const currentPrice = prices[selectedTab].price;
 		const sizeInput = action === 'BUY' ? buySize : sellSize;
-		const size = parseFloat(sizeInput);
+		const tokenAmount = parseFloat(sizeInput);
 
-		if (size <= 0) {
+		if (tokenAmount <= 0 || !currentPrice || currentPrice <= 0) {
+			magicBlockStatus = 'Price not loaded. Please wait...';
 			return;
 		}
 
@@ -430,15 +442,20 @@
 					selectedTab,
 					action,
 					currentPrice,
-					size
+					tokenAmount
 				);
 
 				magicBlockStatus = `${action} complete`;
 
+				// Immediate refresh
+				await updateWalletStatus();
+				updateAvailableBalance();
+
+				// Additional refresh after delay
 				setTimeout(async () => {
 					await updateWalletStatus();
 					updateAvailableBalance();
-				}, 2000);
+				}, 1000);
 			} catch (error: any) {
 				console.error('Trade error:', error);
 				magicBlockStatus = `${action} failed`;
@@ -463,9 +480,10 @@
 
 		const currentPrice = prices[selectedTab].price;
 		const sizeInput = direction === 'LONG' ? longSize : shortSize;
-		const size = parseFloat(sizeInput);
+		const tokenAmount = parseFloat(sizeInput);
 
-		if (!size || size <= 0) {
+		if (!tokenAmount || tokenAmount <= 0 || !currentPrice || currentPrice <= 0) {
+			magicBlockStatus = 'Price not loaded. Please wait...';
 			return;
 		}
 
@@ -479,17 +497,22 @@
 					selectedTab,
 					direction === 'LONG' ? PositionDirection.Long : PositionDirection.Short,
 					currentPrice,
-					size,
+					tokenAmount,
 					tp,
 					sl
 				);
 
 				magicBlockStatus = 'Position opened';
 
+				// Immediate refresh
+				await updateWalletStatus();
+				updateAvailableBalance();
+
+				// Additional refresh after delay
 				setTimeout(async () => {
 					await updateWalletStatus();
 					updateAvailableBalance();
-				}, 2000);
+				}, 1000);
 			} catch (error: any) {
 				console.error('Position error:', error);
 				magicBlockStatus = 'Open failed';
@@ -502,7 +525,7 @@
 			symbol: selectedTab,
 			direction,
 			entryPrice: currentPrice,
-			size,
+			size: tokenAmount,
 			takeProfit: takeProfit ? parseFloat(takeProfit) : null,
 			stopLoss: stopLoss ? parseFloat(stopLoss) : null,
 			timestamp: new Date().toLocaleTimeString(),
@@ -1017,7 +1040,7 @@
 									on:input={(e) => updateCurrentSize(e.target.value)}
 									placeholder="0.00"
 								/>
-								<div class="input-suffix">USDT</div>
+								<div class="input-suffix">{activeTradingPanel === 'buy' || activeTradingPanel === 'long' ? selectedTab : selectedTab}</div>
 							</div>
 							{#if activeTradingPanel === 'long' || activeTradingPanel === 'short'}
 								<div class="input-control">
@@ -1059,7 +1082,19 @@
 									<div class="summary-row">
 										<span>Est. Cost:</span>
 										<span class="summary-value">
-											{(parseFloat(currentSize) || 0).toFixed(2)} USDT
+											{prices[selectedTab].price > 0 
+												? ((parseFloat(currentSize) || 0) * prices[selectedTab].price).toFixed(2) + ' USDT'
+												: 'Loading...'
+											}
+										</span>
+									</div>
+									<div class="summary-row">
+										<span>You will {activeTradingPanel === 'buy' || activeTradingPanel === 'long' ? 'receive' : 'sell'}:</span>
+										<span class="summary-value">
+											{prices[selectedTab].price > 0 && currentSize
+												? (parseFloat(currentSize) || 0).toFixed(4) + ' ' + selectedTab
+												: 'Loading...'
+											}
 										</span>
 									</div>
 								{/if}
