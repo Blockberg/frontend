@@ -185,13 +185,6 @@ export class MagicBlockClient {
 			transaction.recentBlockhash = latestBlockhash.blockhash;
 			transaction.feePayer = currentWallet.publicKey;
 
-				userAccount: userAccountPDA.toBase58(),
-				treasury: treasuryPubkey.toBase58(),
-				pairIndex,
-				entryFee: entryFeeScaled,
-				blockhash: latestBlockhash.blockhash
-			});
-
 			// Sign and send transaction on main chain
 			let signature: string;
 			if (currentWallet.signTransaction) {
@@ -444,12 +437,6 @@ export class MagicBlockClient {
 			throw new Error('Wallet not connected');
 		}
 
-			pair: pairSymbol,
-			direction,
-			price: currentPrice,
-			size,
-		});
-
 		const pairIndex = TRADING_PAIRS[pairSymbol as keyof typeof TRADING_PAIRS];
 		if (pairIndex === undefined) {
 			throw new Error(`Unknown trading pair: ${pairSymbol}`);
@@ -508,24 +495,10 @@ export class MagicBlockClient {
 
 		const requiredBalance = requiredTokenIn / 1e6; // Convert back to readable format for comparison
 		const epsilon = 0.01; // Allow 0.01 USDT tolerance for floating point precision
-			available: accountData.tokenInBalance,
-			required: requiredBalance,
-			difference: accountData.tokenInBalance - requiredBalance,
-			size,
-			currentPrice
-		});
 
 		if (accountData.tokenInBalance < requiredBalance - epsilon) {
 			throw new Error(`Insufficient balance. Required: ${requiredBalance.toFixed(2)} USDT, Available: ${accountData.tokenInBalance.toFixed(2)} USDT`);
 		}
-
-			direction,
-			pairIndex,
-			priceScaled,
-			amountTokenOut: amountTokenOut.toString(),
-			takeProfitScaled,
-			stopLossScaled
-		});
 
 		// Get the user account PDA for this pair
 		const [userAccountPDA] = this.getUserAccountPDA(currentWallet.publicKey, pairIndex);
@@ -668,11 +641,6 @@ export class MagicBlockClient {
 		}
 
 		const requiredBalance = requiredTokenIn / 1e6; // Convert back to readable format
-			available: accountData.tokenInBalance,
-			required: requiredBalance,
-			size,
-			currentPrice
-		});
 
 		if (accountData.tokenInBalance < requiredBalance) {
 			throw new Error(`Insufficient balance. Required: ${requiredBalance.toFixed(2)} USDT, Available: ${accountData.tokenInBalance.toFixed(2)} USDT`);
@@ -873,12 +841,6 @@ export class MagicBlockClient {
 		if (!currentWallet) {
 			throw new Error('Wallet not connected');
 		}
-
-			pair: pairSymbol,
-			action,
-			price: currentPrice,
-			sizeInUSDT,
-		});
 
 		const pairIndex = TRADING_PAIRS[pairSymbol as keyof typeof TRADING_PAIRS];
 		if (pairIndex === undefined) {
