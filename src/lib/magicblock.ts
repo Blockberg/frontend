@@ -133,6 +133,12 @@ export class MagicBlockClient {
 		}
 
 		try {
+			// Check wallet balance first
+			const balance = await this.connection.getBalance(currentWallet.publicKey);
+			if (balance < 500000000) { // 0.5 SOL minimum
+				throw new Error('Insufficient SOL balance');
+			}
+
 			const [userAccountPDA] = this.getUserAccountPDA(currentWallet.publicKey, pairIndex);
 			const [configPDA] = this.getConfigPDA();
 

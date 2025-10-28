@@ -128,13 +128,17 @@
 
 	async function initializeAllAccounts() {
 		if (!connectedWallet?.connected) {
-			alert('Please connect your wallet first');
+			return;
+		}
+
+		if (walletBalance < 0.5) {
+			magicBlockStatus = 'Insufficient SOL. Click AIRDROP first.';
 			return;
 		}
 
 		try {
-			magicBlockStatus = 'Initializing trading accounts...';
-			
+			magicBlockStatus = 'Initializing...';
+
 			// Initialize accounts for all pairs that aren't already initialized
 			for (const [pairName, pairIndex] of Object.entries(TRADING_PAIRS)) {
 				if (!accountsInitialized[pairIndex]) {
@@ -144,13 +148,13 @@
 
 			// Update status after initialization
 			await updateWalletStatus();
-			
+
 			// Refresh mock token balances after initialization
 			setTimeout(async () => {
 				await updateWalletStatus();
-			}, 3000); // Wait 3 seconds for accounts to be fully initialized
+			}, 3000);
 		} catch (error: any) {
-			magicBlockStatus = `Initialization failed: ${error.message}`;
+			magicBlockStatus = 'Initialization failed';
 		}
 	}
 
@@ -270,23 +274,20 @@
 	async function executeSpotTrade(action: 'BUY' | 'SELL') {
 
 		if (!connectedWallet?.connected) {
-			alert('Please connect your wallet to trade');
 			return;
 		}
 
 		const currentPrice = prices[selectedTab].price;
 		const size = parseFloat(positionSize);
 
-
 		if (size <= 0) {
-			alert('Please enter a valid position size');
 			return;
 		}
 
 		if (isOnChainMode && connectedWallet?.connected) {
 			try {
-				magicBlockStatus = `Executing ${action} trade on-chain...`;
-				
+				magicBlockStatus = `${action}...`;
+
 				const txSig = await magicBlockClient.executeSpotTrade(
 					selectedTab,
 					action,
@@ -294,25 +295,22 @@
 					size
 				);
 
-				magicBlockStatus = `${action} trade completed: ${txSig.substring(0, 8)}...`;
-				
-				// Refresh balances after successful trade
+				magicBlockStatus = `${action} complete`;
+
 				setTimeout(async () => {
 					await updateWalletStatus();
 				}, 2000);
 			} catch (error: any) {
-				magicBlockStatus = `Error - check console`;
+				magicBlockStatus = `${action} failed`;
 				return;
 			}
 		}
 
-		// Clear form
 		positionSize = '100';
 	}
 
 	async function openPosition(direction: 'LONG' | 'SHORT') {
 		if (!connectedWallet?.connected) {
-			alert('Please connect your wallet to open positions');
 			return;
 		}
 
@@ -320,13 +318,12 @@
 		const size = parseFloat(positionSize);
 
 		if (!size || size <= 0) {
-			alert('Invalid position size');
 			return;
 		}
 
 		if (isOnChainMode) {
 			try {
-				magicBlockStatus = 'Opening position on-chain...';
+				magicBlockStatus = 'Opening...';
 				const tp = takeProfit ? parseFloat(takeProfit) : undefined;
 				const sl = stopLoss ? parseFloat(stopLoss) : undefined;
 
@@ -339,20 +336,13 @@
 					sl
 				);
 
-				
-				// Check if it's a MagicBlock or direct contract transaction
-				if (txSig.length > 50) {
-					magicBlockStatus = `Position opened (Direct): ${txSig.substring(0, 8)}...`;
-				} else {
-					magicBlockStatus = `Position opened (MagicBlock): ${txSig.substring(0, 8)}...`;
-				}
-				
-				// Refresh positions and balances after opening
+				magicBlockStatus = 'Position opened';
+
 				setTimeout(async () => {
 					await updateWalletStatus();
 				}, 2000);
 			} catch (error: any) {
-				magicBlockStatus = `Failed to open position: ${error.message || 'Transaction failed'}`;
+				magicBlockStatus = 'Open failed';
 				return;
 			}
 		}
@@ -402,19 +392,16 @@
 				}, 1000);
 				
 			} catch (error: any) {
-				
-				// Check if it's the "already processed" error which often means success
-				if (error.message?.includes('This transaction has already been processed') || 
+				if (error.message?.includes('This transaction has already been processed') ||
 					error.message?.includes('Transaction already processed')) {
-					magicBlockStatus = 'Position closed (already processed)';
-					
-					// Refresh positions immediately since it likely succeeded
+					magicBlockStatus = 'Position closed';
+
 					await fetchOnChainPositions();
 					setTimeout(async () => {
 						await fetchOnChainPositions();
 					}, 1000);
 				} else {
-					magicBlockStatus = `Error: ${error.message}`;
+					magicBlockStatus = 'Close failed';
 				}
 			}
 		}
@@ -439,32 +426,28 @@
 
 	async function requestAirdrop() {
 		if (!connectedWallet?.connected) {
-			alert('Please connect your wallet first');
 			return;
 		}
 
 		try {
 			magicBlockStatus = 'Requesting airdrop...';
-			// Request airdrop to the connected wallet
 			const signature = await magicBlockClient.connection.requestAirdrop(
 				connectedWallet.publicKey,
-				1000000000 // 1 SOL
+				1000000000
 			);
-			magicBlockStatus = `Airdrop sent: ${signature.substring(0, 8)}...`;
+			magicBlockStatus = 'Airdrop sent';
 
-			// Poll balance every 2 seconds to update UI
 			const pollInterval = setInterval(async () => {
 				await updateWalletStatus();
 				if (walletBalance > 0.5) {
-					magicBlockStatus = `Wallet funded (${walletBalance.toFixed(4)} SOL)`;
+					magicBlockStatus = `Funded: ${walletBalance.toFixed(2)} SOL`;
 					clearInterval(pollInterval);
 				}
 			}, 2000);
 
-			// Stop polling after 60 seconds
 			setTimeout(() => clearInterval(pollInterval), 60000);
 		} catch (error: any) {
-			magicBlockStatus = `Airdrop failed: ${error.message || 'Request failed'}`;
+			magicBlockStatus = 'Airdrop failed';
 		}
 	}
 
