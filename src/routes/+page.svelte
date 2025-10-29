@@ -1248,9 +1248,6 @@
 					COMPETITION LEADERBOARD
 					<span class="leaderboard-stats">
 						<span>WIN RATE: {totalTrades > 0 ? ((winningTrades / totalTrades) * 100).toFixed(1) : 0}%</span>
-						<span class={totalPnL >= 0 ? 'pnl-up' : 'pnl-down'}>
-							YOUR P&L: ${totalPnL.toFixed(2)}
-						</span>
 					</span>
 				</div>
 				<div class="leaderboard-table">

@@ -558,8 +558,9 @@ export class MagicBlockClient {
 		instructionData.writeBigUInt64LE(BigInt(stopLossScaled), 32);
 
 		// Calculate position PDA - read total_positions from account data
+		// Updated UserAccount structure: discriminator(8) + owner(32) + pair_index(1) + token_in_balance(8) + token_out_balance(8) + token_in_decimals(1) + token_out_decimals(1) + total_positions(8)
 		const dataView = new DataView(accountInfo.data.buffer, accountInfo.data.byteOffset, accountInfo.data.byteLength);
-		const totalPositions = dataView.getBigUint64(8 + 32 + 1 + 8 + 8, true); // little endian
+		const totalPositions = dataView.getBigUint64(8 + 32 + 1 + 8 + 8 + 1 + 1, true); // little endian
 		
 		// Convert totalPositions to little endian bytes (8 bytes for u64)
 		const totalPositionsBuffer = Buffer.allocUnsafe(8);
@@ -698,8 +699,9 @@ export class MagicBlockClient {
 		instructionData.writeBigUInt64LE(BigInt(stopLossScaled), 32);
 
 		// Calculate position PDA - read total_positions from account data
+		// Updated UserAccount structure: discriminator(8) + owner(32) + pair_index(1) + token_in_balance(8) + token_out_balance(8) + token_in_decimals(1) + token_out_decimals(1) + total_positions(8)
 		const dataView = new DataView(accountInfo.data.buffer, accountInfo.data.byteOffset, accountInfo.data.byteLength);
-		const totalPositions = dataView.getBigUint64(8 + 32 + 1 + 8 + 8, true); // little endian
+		const totalPositions = dataView.getBigUint64(8 + 32 + 1 + 8 + 8 + 1 + 1, true); // little endian
 		
 		// Convert totalPositions to little endian bytes (8 bytes for u64)
 		const totalPositionsBuffer = Buffer.allocUnsafe(8);
