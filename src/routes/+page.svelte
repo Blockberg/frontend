@@ -328,8 +328,15 @@
 
 		const currentPairIndex = TRADING_PAIRS[selectedTab];
 		if (mockTokenBalances[currentPairIndex]) {
+			const lockedUSDT = onChainPositions
+				.filter(p => p.pairIndex === currentPairIndex && p.status === 'ACTIVE')
+				.reduce((total, p) => {
+					const positionValue = p.amountTokenOut * p.entryPrice;
+					return total + positionValue;
+				}, 0);
+
 			availableBalance = {
-				tokenIn: mockTokenBalances[currentPairIndex].tokenInBalance,
+				tokenIn: Math.max(0, mockTokenBalances[currentPairIndex].tokenInBalance - lockedUSDT),
 				tokenOut: mockTokenBalances[currentPairIndex].tokenOutBalance
 			};
 		} else {
@@ -644,7 +651,7 @@
 	}
 
 	// Reactive statement to update available balance when tab or balances change
-	$: if (selectedTab && mockTokenBalances) {
+	$: if (selectedTab && mockTokenBalances && onChainPositions) {
 		updateAvailableBalance();
 	}
 
@@ -1595,8 +1602,8 @@
 	}
 
 	.news-panel {
-		height: calc(100vh - 20px);
-		max-height: calc(100vh - 20px);
+		height: 650px;
+		max-height: 650px;
 	}
 
 	.panel-header {

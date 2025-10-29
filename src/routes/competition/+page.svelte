@@ -21,6 +21,14 @@
 		mostActive: '0 trades'
 	};
 
+	let prices: Record<string, { price: number; change: number }> = {
+		'SOL': { price: 0, change: 0 },
+		'BTC': { price: 0, change: 0 },
+		'ETH': { price: 0, change: 0 },
+		'AVAX': { price: 0, change: 0 },
+		'LINK': { price: 0, change: 0 }
+	};
+
 	let connectedWallet: any = null;
 	let walletAddress = '';
 	let isJoined = false;
@@ -85,13 +93,40 @@
 		}
 	}
 
+	async function fetchPrices() {
+		try {
+			const priceIds = {
+				'SOL': 'ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d',
+				'BTC': 'e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43',
+				'ETH': 'ff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace',
+				'AVAX': '93da3352f9f1d105fdfe4971cfa80e9dd777bfc5d0f683ebb6e1294b92137bb7',
+				'LINK': '8ac0c70fff57e9aefdf5edf44b51d62c2d433653cbb2cf5cc06bb115af04d221'
+			};
+
+			for (const [symbol, priceId] of Object.entries(priceIds)) {
+				const response = await fetch(`https://hermes.pyth.network/v2/updates/price/latest?ids[]=${priceId}`);
+				const data = await response.json();
+				if (data.parsed && data.parsed[0]) {
+					const priceData = data.parsed[0].price;
+					const newPrice = parseFloat(priceData.price) * Math.pow(10, priceData.expo);
+					prices[symbol].price = newPrice;
+				}
+			}
+		} catch (error) {
+			console.error('[COMPETITION] Failed to fetch prices:', error);
+		}
+	}
+
 	async function fetchLeaderboard() {
 		try {
-			// Fetch real leaderboard data from the competition components
-			const data = await magicBlockClient.fetchLeaderboard();
+			const currentPrices: Record<string, number> = {};
+			for (const [symbol, priceData] of Object.entries(prices)) {
+				currentPrices[symbol] = priceData.price;
+			}
+
+			const data = await magicBlockClient.fetchLeaderboard(currentPrices);
 			leaderboard = data;
-			
-			// Update competition stats
+
 			if (data.length > 0) {
 				competitionStats.topGainer = `+$${Math.max(...data.map(p => p.pnl)).toFixed(2)}`;
 				competitionStats.mostActive = `${Math.max(...data.map(p => p.trades))} trades`;
@@ -103,9 +138,17 @@
 
 	async function fetchRecentActivity() {
 		try {
-			// This would fetch recent trading activity from position components
-			// For now, we'll implement this when position tracking is added
-			console.log('[COMPETITION] Fetching recent activity...');
+			const allPositions = await magicBlockClient.fetchPositions();
+			recentActivity = allPositions
+				.sort((a, b) => b.openedAt.getTime() - a.openedAt.getTime())
+				.slice(0, 10)
+				.map(p => ({
+					trader: p.pubkey?.substring(0, 8) || 'Unknown',
+					action: `${p.direction} ${p.pairSymbol}`,
+					size: `$${(p.amountTokenOut * p.entryPrice).toFixed(2)}`,
+					price: `$${p.entryPrice.toFixed(2)}`,
+					time: p.openedAt.toLocaleTimeString()
+				}));
 		} catch (error) {
 			console.error('[COMPETITION] Failed to fetch activity:', error);
 		}
@@ -155,17 +198,22 @@
 		updateTime();
 		const timeInterval = setInterval(updateTime, 1000);
 
+		await fetchPrices();
 		await fetchLeaderboard();
 		await fetchRecentActivity();
-		
-		// Set up periodic data fetching
+
+		const priceInterval = setInterval(async () => {
+			await fetchPrices();
+		}, 2000);
+
 		const dataInterval = setInterval(async () => {
 			await fetchLeaderboard();
 			await fetchRecentActivity();
-		}, 5000); // Refresh every 5 seconds
+		}, 60000);
 
 		return () => {
 			clearInterval(timeInterval);
+			clearInterval(priceInterval);
 			clearInterval(dataInterval);
 		};
 	});
