@@ -1217,12 +1217,6 @@
 									<span class="token-label">{selectedTab}:</span>
 									<span class="token-amount">{mockTokenBalances[currentPairIndex].tokenOutBalance.toFixed(4)}</span>
 								</div>
-								<div class="token-balance pnl-balance">
-									<span class="token-label">P&L:</span>
-									<span class="token-amount" class:pnl-up={pnl >= 0} class:pnl-down={pnl < 0}>
-										{pnl >= 0 ? '+' : ''}{pnl.toFixed(2)}
-									</span>
-								</div>
 							</div>
 						</div>
 					{:else if accountsInitialized[currentPairIndex]}
